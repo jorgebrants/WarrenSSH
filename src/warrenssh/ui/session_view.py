@@ -62,7 +62,7 @@ class SessionView(Gtk.Box):
             return None
 
         resolved = resolve_all(node, self._store, with_defaults=True)
-        tab = TerminalTab(node, resolved)
+        tab = TerminalTab(node, resolved, self._store.preferences)
         tab.connect("session-error", lambda _t, msg: self.emit("session-error", msg))
         tab.connect("session-exited", self._on_session_exited)
         tab.connect("user-typed", self._on_user_typed)
@@ -74,6 +74,15 @@ class SessionView(Gtk.Box):
         self.tab_view.set_selected_page(page)
         self._refresh_broadcast_marks()
         return page
+
+    def refresh_appearance(self) -> None:
+        """Reaplica fonte, cores e cursor nas sessões já abertas.
+
+        As preferências são o topo da cascata, então mudá-las muda o valor
+        efetivo de quem não definiu o seu — inclusive de quem já está conectado.
+        """
+        for tab in self.terminal_tabs():
+            tab.reload_appearance(resolve_all(tab.node, self._store, with_defaults=True))
 
     def current_tab(self) -> TerminalTab | None:
         page = self.tab_view.get_selected_page()
@@ -138,10 +147,39 @@ class SessionView(Gtk.Box):
 
     def _on_close_page(self, tab_view: Adw.TabView, page: Adw.TabPage) -> bool:
         child = page.get_child()
+        if (
+            isinstance(child, TerminalTab)
+            and child.is_running
+            and self._store.preferences.get_app("confirm_close_tab")
+        ):
+            self._confirmar_fechamento(page, child)
+            return True  # a resposta do diálogo é que decide
+
         if isinstance(child, TerminalTab):
             child.close()
         tab_view.close_page_finish(page, True)
-        return True  # o fechamento já foi confirmado acima
+        return True
+
+    def _confirmar_fechamento(self, page: Adw.TabPage, tab: TerminalTab) -> None:
+        dialogo = Adw.AlertDialog(
+            heading="Fechar a sessão?",
+            body=f"“{tab.node.name}” ainda está conectada.",
+        )
+        dialogo.add_response("cancel", "Manter aberta")
+        dialogo.add_response("close", "Fechar")
+        dialogo.set_response_appearance("close", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialogo.set_default_response("cancel")
+        dialogo.set_close_response("cancel")
+        dialogo.connect("response", self._on_confirmacao, page, tab)
+        dialogo.present(self)
+
+    def _on_confirmacao(
+        self, _d: Adw.AlertDialog, resposta: str, page: Adw.TabPage, tab: TerminalTab
+    ) -> None:
+        fechar = resposta == "close"
+        if fechar:
+            tab.close()
+        self.tab_view.close_page_finish(page, fechar)
 
     def _on_session_exited(self, tab: TerminalTab, _status: int) -> None:
         page = self.tab_view.get_page(tab)

@@ -217,3 +217,78 @@ def test_parse_value_bool_none_continua_none():
     """None significa 'sem valor local'; só um bool de verdade vira False."""
     assert parse_value("request_pty", None) is None
     assert parse_value("request_pty", False) is False
+
+
+# ----------------------------------------------------------------------- cores
+
+
+@pytest.mark.parametrize(
+    "entrada,esperado",
+    [
+        ("#1d1d1d", "#1d1d1d"),
+        ("#ABCDEF", "#abcdef"),
+        ("#abc", "#aabbcc"),
+        ("1d1d1d", "#1d1d1d"),      # o `#` é opcional
+        ("  #FFF  ", "#ffffff"),
+        ("", None),                  # vazio = segue o esquema de cores
+        (None, None),
+    ],
+)
+def test_parse_cor(entrada, esperado):
+    assert parse_value("background_color", entrada) == esperado
+
+
+@pytest.mark.parametrize("ruim", ["vermelho", "#12345", "#gggggg", "#", "rgb(0,0,0)"])
+def test_cor_invalida_e_recusada(ruim):
+    with pytest.raises(EditingError):
+        parse_value("foreground_color", ruim)
+
+
+def test_cores_sao_herdaveis(tree):
+    """O caso de uso: a pasta define a cor e as conexões dentro a assumem."""
+    store, pasta, conn = tree
+    pasta.properties["background_color"] = "#3a0d0d"
+    conn.inherited.add("background_color")
+    assert resolve(conn, "background_color", store) == "#3a0d0d"
+
+
+def test_cores_aparecem_no_editor_de_pasta_e_conexao():
+    for kind in ("folder", "connection"):
+        campos = fields_for(kind)
+        assert "background_color" in campos
+        assert "foreground_color" in campos
+
+
+def test_apply_edits_normaliza_a_cor(tree):
+    store, _pasta, conn = tree
+    apply_edits(conn, {"host": "h", "background_color": "#ABC"}, inherited=set(), store=store)
+    assert conn.properties["background_color"] == "#aabbcc"
+
+
+# ------------------------------------------------------- opções novas do nó
+
+
+def test_keepalive_e_validado():
+    assert parse_value("server_alive_interval", "30") == 30
+    assert parse_value("server_alive_interval", "") is None
+    with pytest.raises(EditingError):
+        parse_value("server_alive_interval", "-1")
+    with pytest.raises(EditingError):
+        parse_value("server_alive_interval", "99999")
+
+
+def test_opcoes_booleanas_novas():
+    assert parse_value("forward_agent", True) is True
+    assert parse_value("compression", False) is False
+    assert parse_value("forward_agent", None) is None
+
+
+def test_campos_novos_aparecem_no_editor():
+    campos = fields_for("connection")
+    for chave in ("font", "server_alive_interval", "forward_agent", "compression"):
+        assert chave in campos, chave
+
+
+def test_pasta_tambem_pode_definir_keepalive():
+    """Uma pasta com keepalive vale para toda a frota dentro dela."""
+    assert "server_alive_interval" in fields_for("folder")

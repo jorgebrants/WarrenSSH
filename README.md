@@ -7,7 +7,7 @@ libadwaita.
 - **Linux only**, **SSH only** — o terminal *é* o produto.
 - Árvore de pastas e conexões; cada propriedade pode ter valor local ou herdar do pai.
 - Segredos em `libsecret`, nunca no JSON.
-- Import de `~/.ssh/config`.
+- Import de `~/.ssh/config`, inclusive com `Include`.
 
 ## Requisitos
 
@@ -21,8 +21,11 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
 ```bash
 python3 -m venv --system-site-packages .venv   # --system-site-packages é essencial pro `gi`
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"                        # só pytest; o app não tem dependências
 ```
+
+O WarrenSSH não usa nenhuma biblioteca Python de terceiros em tempo de execução
+— apenas a biblioteca padrão e o `gi` do sistema.
 
 ## Rodar
 
@@ -101,16 +104,50 @@ Para apontar para outro binário (ou embrulhar o comando), use:
 WARRENSSH_SSH_BINARY="/usr/bin/ssh -F /caminho/config" warrenssh
 ```
 
-### Atualizando a versão do paramiko no manifesto
+## Preferências globais
 
-```bash
-python3 -c "
-import json, urllib.request
-m = json.load(urllib.request.urlopen('https://pypi.org/pypi/paramiko/json'))
-w = next(u for u in m['urls'] if u['packagetype'] == 'bdist_wheel')
-print(m['info']['version']); print(w['url']); print(w['digests']['sha256'])
-"
+`Ctrl+,` ou menu → **Preferências**. Três páginas:
+
+- **Terminal** — fonte, cursor, cores, paleta ANSI (Adwaita, Solarized, Nord,
+  Gruvbox, Tango), histórico, rolagem e bell.
+- **Conexão** — keepalive, encaminhamento do agente, compressão, e padrões de
+  usuário/chave/argumentos.
+- **Programa** — tema da janela, avisos ao fechar aba e ao sair, reconexão
+  automática, conectar com um clique, e a senha automática.
+
+O que está em **Terminal** e **Conexão** não é uma segunda configuração
+competindo com a árvore: são o **topo da cascata de herança**. A resolução de
+uma propriedade fica assim:
+
 ```
+conexão → pasta → … → raiz → preferências globais → padrão de fábrica
+```
+
+Ou seja, "global" quer dizer "o valor de quem não definiu o seu". Qualquer pasta
+ou conexão continua podendo sobrescrever, e o editor do nó mostra de onde veio
+cada valor. Mudanças valem na hora, inclusive em sessões já abertas.
+
+Guardadas em `~/.config/warrenssh/preferences.json`, separadas da árvore.
+
+## Senha automática
+
+A senha guardada no chaveiro é entregue ao `ssh` pelo mecanismo `SSH_ASKPASS` do
+próprio OpenSSH: o `warrenssh-askpass` lê o chaveiro e responde ao prompt. A
+senha não passa pelo terminal nem pela linha de comando.
+
+Ela só é usada quando **as duas** condições valem:
+
+1. há segredo guardado para aquela conexão;
+2. o host já está no `known_hosts`.
+
+A segunda condição não é capricho. Com `SSH_ASKPASS_REQUIRE=force`, a pergunta
+"the authenticity of host can't be established" também vai para o askpass — e
+responder isso automaticamente anularia a proteção contra ataques de
+intermediário. Então o helper **recusa** qualquer confirmação, e num host novo o
+WarrenSSH nem liga a senha automática: você aceita a chave e digita a senha uma
+vez, e a partir daí é automático.
+
+Para desligar por completo, apague a senha no editor da conexão.
 
 ## Ícone
 
@@ -136,6 +173,10 @@ for t in (16, 24, 32, 48, 64, 128, 256, 512):
 | `Ctrl+W` | fechar a aba |
 | `Ctrl+Shift+T` | reconectar a aba |
 | `Ctrl+Shift+Enter` | ligar/desligar broadcast |
+| `Ctrl+Shift+C` | copiar a seleção do terminal |
+| `Ctrl+Shift+V` | colar no terminal |
+| `Ctrl+Shift+A` | selecionar tudo no terminal |
+| `Ctrl+ +` / `Ctrl+ -` / `Ctrl+0` | aumentar, diminuir e restaurar a fonte |
 | `Ctrl+Q` | sair |
 
 ## Licença

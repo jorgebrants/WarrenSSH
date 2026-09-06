@@ -7,6 +7,7 @@ testáveis sem GTK.
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import Any
 
@@ -21,21 +22,33 @@ FIELD_LABELS: dict[str, str] = {
     "port": "Porta",
     "identity_file": "Chave privada",
     "proxy_jump": "Bastion (ProxyJump)",
+    "server_alive_interval": "Manter viva (segundos)",
+    "forward_agent": "Encaminhar o agente SSH",
+    "compression": "Compressão",
     "request_pty": "Forçar PTY (-t)",
     "extra_ssh_args": "Argumentos extras do ssh",
     "startup_command": "Comando inicial",
     "charset": "Codificação",
     "scrollback_lines": "Linhas de histórico",
     "color_scheme": "Esquema de cores",
+    "foreground_color": "Cor do texto",
+    "background_color": "Cor do fundo",
+    "font": "Fonte",
 }
 
 #: `host` identifica a máquina: herdar não faz sentido, e pastas não têm host.
 NON_INHERITABLE: frozenset[str] = frozenset({"host"})
 
-BOOL_FIELDS: frozenset[str] = frozenset({"request_pty"})
-INT_FIELDS: frozenset[str] = frozenset({"port", "scrollback_lines"})
+BOOL_FIELDS: frozenset[str] = frozenset({"request_pty", "forward_agent", "compression"})
+INT_FIELDS: frozenset[str] = frozenset(
+    {"port", "scrollback_lines", "server_alive_interval"}
+)
 LIST_FIELDS: frozenset[str] = frozenset({"extra_ssh_args"})
 CHOICE_FIELDS: dict[str, tuple[str, ...]] = {"color_scheme": ("system", "dark", "light")}
+COLOR_FIELDS: frozenset[str] = frozenset({"foreground_color", "background_color"})
+
+#: `#rgb` ou `#rrggbb`, com ou sem o `#`.
+_COR = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
 class EditingError(ValueError):
@@ -105,6 +118,8 @@ def parse_value(key: str, raw: Any) -> Any:
             raise EditingError("Porta deve ficar entre 1 e 65535")
         if key == "scrollback_lines" and number < 0:
             raise EditingError("Linhas de histórico não pode ser negativo")
+        if key == "server_alive_interval" and not 0 <= number <= 3600:
+            raise EditingError("Manter viva: use de 0 a 3600 segundos")
         return number
 
     if key in LIST_FIELDS:
@@ -116,6 +131,9 @@ def parse_value(key: str, raw: Any) -> Any:
             raise EditingError(f"{FIELD_LABELS.get(key, key)}: {exc}") from exc
         return parts or None
 
+    if key in COLOR_FIELDS:
+        return _parse_cor(str(raw))
+
     if key in CHOICE_FIELDS:
         text = str(raw)
         if text not in CHOICE_FIELDS[key]:
@@ -123,6 +141,17 @@ def parse_value(key: str, raw: Any) -> Any:
         return text
 
     return str(raw)
+
+
+def _parse_cor(texto: str) -> str:
+    """Normaliza uma cor para `#rrggbb`, aceitando `#rgb` e a forma sem `#`."""
+    casamento = _COR.match(texto.strip())
+    if casamento is None:
+        raise EditingError(f"Cor inválida: {texto!r} (use #rrggbb, ex.: #1d1d1d)")
+    digitos = casamento.group(1).lower()
+    if len(digitos) == 3:
+        digitos = "".join(d * 2 for d in digitos)
+    return f"#{digitos}"
 
 
 def format_value(key: str, value: Any) -> str:

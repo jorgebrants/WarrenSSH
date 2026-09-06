@@ -17,6 +17,7 @@ from warrenssh.models.store import Store  # noqa: E402
 from warrenssh import secrets  # noqa: E402
 from warrenssh.ui.editor import NodeEditor  # noqa: E402
 from warrenssh.ui.import_dialog import ImportDialog  # noqa: E402
+from warrenssh.ui.preferences import PreferencesDialog  # noqa: E402
 from warrenssh.ui.session_view import SessionView  # noqa: E402
 from warrenssh.ui.sidebar import Sidebar  # noqa: E402
 
@@ -28,6 +29,7 @@ ACCELS: dict[str, list[str]] = {
     "win.toggle-broadcast": ["<Primary><Shift>Return"],
     "win.new-connection": ["<Primary>n"],
     "win.new-folder": ["<Primary><Shift>n"],
+    "win.preferences": ["<Primary>comma"],
 }
 
 
@@ -44,6 +46,7 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
 
         self._editor: NodeEditor | None = None
         self._import_dialog: ImportDialog | None = None
+        self._prefs_dialog: PreferencesDialog | None = None
         self._sidebar = Sidebar(self.store)
         self._sidebar.connect("connection-activated", self._on_connection_activated)
 
@@ -62,6 +65,8 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
         self._toasts.set_child(self._split_view)
         self.set_content(self._toasts)
         self._setup_actions()
+        self._apply_preferences()
+        self.connect("close-request", self._on_close_request)
 
     # ------------------------------------------------------------------ montagem
 
@@ -111,6 +116,7 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
 
         menu = Gio.Menu()
         menu.append("Importar do ~/.ssh/config", "win.import-ssh-config")
+        menu.append("Preferências", "win.preferences")
         menu.append("Sair", "app.quit")
         header.pack_end(
             Gtk.MenuButton(
@@ -145,6 +151,7 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
             ("edit-node", lambda *_: self._edit_selected()),
             ("delete-node", lambda *_: self._delete_selected()),
             ("import-ssh-config", lambda *_: self._import_ssh_config()),
+            ("preferences", lambda *_: self._open_preferences()),
             ("reconnect-tab", lambda *_: self._sessions.reconnect_current()),
             ("close-tab", lambda *_: self._sessions.close_current()),
             ("focus-search", lambda *_: self._sidebar.focus_search()),
@@ -220,6 +227,56 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
             self._broadcast_button.add_css_class("suggested-action")
         else:
             self._broadcast_button.remove_css_class("suggested-action")
+
+    def _on_close_request(self, *_args: object) -> bool:
+        """Confirma antes de fechar a janela com sessões vivas."""
+        vivas = [t for t in self._sessions.terminal_tabs() if t.is_running]
+        if not vivas or not self.store.preferences.get_app("confirm_quit"):
+            return False  # segue o fechamento
+
+        nomes = ", ".join(f"“{t.node.name}”" for t in vivas[:3])
+        resto = f" e mais {len(vivas) - 3}" if len(vivas) > 3 else ""
+        dialogo = Adw.AlertDialog(
+            heading="Sair com sessões abertas?",
+            body=f"{len(vivas)} sessão(ões) ainda conectada(s): {nomes}{resto}.",
+        )
+        dialogo.add_response("cancel", "Continuar aqui")
+        dialogo.add_response("quit", "Sair")
+        dialogo.set_response_appearance("quit", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialogo.set_default_response("cancel")
+        dialogo.set_close_response("cancel")
+        dialogo.connect("response", self._on_quit_response)
+        dialogo.present(self)
+        return True  # segura o fechamento até a resposta
+
+    def _on_quit_response(self, _d: Adw.AlertDialog, resposta: str) -> None:
+        if resposta != "quit":
+            return
+        for tab in self._sessions.terminal_tabs():
+            tab.close()
+        self.destroy()
+
+    def _open_preferences(self) -> None:
+        self._prefs_dialog = PreferencesDialog(self.store.preferences)
+        self._prefs_dialog.connect("changed", lambda *_: self._apply_preferences())
+        self._prefs_dialog.connect("closed", self._on_prefs_closed)
+        self._prefs_dialog.present(self)
+
+    def _on_prefs_closed(self, *_args: object) -> None:
+        self._prefs_dialog = None
+
+    def _apply_preferences(self) -> None:
+        """Reflete na hora o que mudou: tema, clique da árvore e sessões abertas."""
+        prefs = self.store.preferences
+
+        escolha = {
+            "light": Adw.ColorScheme.FORCE_LIGHT,
+            "dark": Adw.ColorScheme.FORCE_DARK,
+        }.get(str(prefs.get_app("theme")), Adw.ColorScheme.DEFAULT)
+        Adw.StyleManager.get_default().set_color_scheme(escolha)
+
+        self._sidebar.set_single_click(bool(prefs.get_app("activate_on_single_click")))
+        self._sessions.refresh_appearance()
 
     def _import_ssh_config(self) -> None:
         self._import_dialog = ImportDialog(self.store)

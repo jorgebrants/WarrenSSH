@@ -173,3 +173,52 @@ def test_ssh_command_prefixa_o_argv():
 def test_ssh_command_vazio_falha():
     with pytest.raises(CommandError):
         build_ssh_argv({"host": "srv"}, ssh_command=[])
+
+
+# ------------------------------------------------------- opções de conexão
+
+
+def test_keepalive_vira_server_alive_interval():
+    argv = build_ssh_argv({"host": "srv", "server_alive_interval": 30}, ssh_binary="ssh")
+    assert argv == ["ssh", "-o", "ServerAliveInterval=30", "srv"]
+
+
+def test_keepalive_zero_ou_vazio_nao_entra():
+    for valor in (0, "", None, False):
+        assert "-o" not in build_ssh_argv({"host": "srv", "server_alive_interval": valor},
+                                          ssh_binary="ssh")
+
+
+def test_keepalive_invalido_falha():
+    with pytest.raises(CommandError):
+        build_ssh_argv({"host": "srv", "server_alive_interval": "abc"}, ssh_binary="ssh")
+    with pytest.raises(CommandError):
+        build_ssh_argv({"host": "srv", "server_alive_interval": -5}, ssh_binary="ssh")
+
+
+def test_forward_agent_e_compressao():
+    argv = build_ssh_argv(
+        {"host": "srv", "forward_agent": True, "compression": True}, ssh_binary="ssh"
+    )
+    assert "-A" in argv and "-C" in argv
+
+
+def test_forward_agent_desligado_nao_entra():
+    argv = build_ssh_argv({"host": "srv", "forward_agent": False}, ssh_binary="ssh")
+    assert "-A" not in argv
+
+
+def test_ordem_com_as_opcoes_novas():
+    argv = build_ssh_argv(
+        {
+            "host": "srv", "port": 2222, "user": "op", "request_pty": True,
+            "server_alive_interval": 60, "forward_agent": True, "compression": True,
+            "extra_ssh_args": ["-o", "ConnectTimeout=5"],
+        },
+        ssh_binary="ssh",
+    )
+    assert argv == [
+        "ssh", "-p", "2222", "-t",
+        "-o", "ServerAliveInterval=60", "-A", "-C",
+        "-o", "ConnectTimeout=5", "op@srv",
+    ]

@@ -188,7 +188,7 @@ def test_host_nunca_e_marcado_como_herdado(tmp_path, hosts):
 
 
 def test_identity_file_volta_para_o_formato_com_til(hosts):
-    """O paramiko expande `~`; o JSON guarda a forma portátil."""
+    """O caminho é guardado na forma portátil entre máquinas."""
     bastion = next(h for h in hosts if h.name == "bastion")
     assert bastion.properties["identity_file"] == "~/.ssh/id_ed25519"
 

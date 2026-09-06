@@ -59,3 +59,9 @@ tabbar .box {
 .dim-label {
   opacity: 0.62;
 }
+
+/* Amostra de cor no editor: mostra sempre a cor efetiva, herdada ou não. */
+.warrenssh-swatch {
+  border-radius: 5px;
+  border: 1px solid alpha(@window_fg_color, 0.25);
+}

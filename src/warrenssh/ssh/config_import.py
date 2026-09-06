@@ -8,14 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-# Só usamos o parser de config. Importar o submódulo não evita o __init__ do
-# pacote (que puxa cryptography/nacl/bcrypt) — o Python sempre executa o pacote
-# pai —, mas deixa explícito o que de fato precisamos daqui.
-from paramiko.config import SSHConfig
-
 from warrenssh.models.editing import NON_INHERITABLE, fields_for
 from warrenssh.models.node import Node, new_connection, new_folder
 from warrenssh.models.store import Store
+from warrenssh.ssh.ssh_config import SSHConfig
 
 IMPORT_FOLDER_NAME = "Importado do ~/.ssh/config"
 
@@ -59,28 +55,25 @@ def display_config_path() -> str:
 def parse_config_text(text: str) -> list[ImportedHost]:
     """Lê um ssh_config e devolve um ImportedHost por `Host` concreto.
 
-    Padrões com curinga (`Host *`, `Host *.interno`) viram só valores herdados
-    pelos demais — o paramiko os aplica no lookup, e eles não viram conexão.
+    Padrões com curinga (`Host *`, `Host *.interno`) emprestam valores aos
+    demais, mas não viram conexão.
     """
-    config = SSHConfig()
-    config.parse(text.splitlines())
+    return _hosts_de(SSHConfig.from_text(text))
 
+
+def parse_config_file(path: Path | str | None = None) -> list[ImportedHost]:
+    """Lê o arquivo do disco, seguindo `Include`. Ausente = nada a importar."""
+    target = Path(path) if path is not None else default_config_path()
+    return _hosts_de(SSHConfig.from_file(target))
+
+
+def _hosts_de(config: SSHConfig) -> list[ImportedHost]:
     hosts: list[ImportedHost] = []
-    for name in _host_names(text):
+    for name in config.host_names():
         properties = _properties_for(config, name)
         if properties.get("host"):
             hosts.append(ImportedHost(name=name, properties=properties))
     return hosts
-
-
-def parse_config_file(path: Path | str | None = None) -> list[ImportedHost]:
-    """Lê o arquivo do disco. Arquivo ausente = nada a importar."""
-    target = Path(path) if path is not None else default_config_path()
-    try:
-        text = target.read_text(encoding="utf-8", errors="replace")
-    except (FileNotFoundError, IsADirectoryError):
-        return []
-    return parse_config_text(text)
 
 
 def import_into(
@@ -126,27 +119,8 @@ def import_into(
 # --------------------------------------------------------------------- internos
 
 
-def _host_names(text: str) -> list[str]:
-    """Nomes concretos das linhas `Host`, na ordem, sem curingas nem repetição."""
-    names: list[str] = []
-    vistos: set[str] = set()
-    for linha in text.splitlines():
-        limpa = linha.split("#", 1)[0].strip()
-        if not limpa:
-            continue
-        palavras = limpa.replace("=", " ", 1).split()
-        if len(palavras) < 2 or palavras[0].lower() != "host":
-            continue
-        for padrao in palavras[1:]:
-            if _is_wildcard(padrao) or padrao in vistos:
-                continue
-            vistos.add(padrao)
-            names.append(padrao)
-    return names
-
-
 def _contract_home(path: str) -> str:
-    """O paramiko expande `~`; devolvemos ao formato portátil entre máquinas."""
+    """Mantém o caminho na forma portátil entre máquinas (`~/...`)."""
     home = os.path.expanduser("~")
     if path == home:
         return "~"
@@ -155,13 +129,8 @@ def _contract_home(path: str) -> str:
     return path
 
 
-def _is_wildcard(pattern: str) -> bool:
-    """`*`, `?` e negações (`!host`) não descrevem uma máquina concreta."""
-    return any(ch in pattern for ch in "*?!")
-
-
 def _properties_for(config: SSHConfig, name: str) -> dict[str, Any]:
-    """Resolve um host pelo paramiko (já com os curingas aplicados) e traduz."""
+    """Resolve um host (com os curingas já aplicados) e traduz as diretivas."""
     lookup = config.lookup(name)
     properties: dict[str, Any] = {}
 

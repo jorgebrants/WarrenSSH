@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Any
 
 import gi
@@ -11,10 +12,18 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
+from warrenssh import secrets  # noqa: E402
+from warrenssh.askpass import ENV_NODE_ID  # noqa: E402
 from warrenssh.models.node import Node  # noqa: E402
+from warrenssh.models.preferences import (  # noqa: E402
+    PALETA_PADRAO,
+    PALETAS,
+    cor_padrao,
+)
 from warrenssh.ssh.command import CommandError, build_ssh_argv, describe  # noqa: E402
+from warrenssh.ssh.known_hosts import is_known  # noqa: E402
 
 try:
     gi.require_version("Vte", "3.91")
@@ -30,15 +39,12 @@ VTE_MISSING_HINT = (
     "sudo apt install gir1.2-vte-3.91"
 )
 
-#: Paleta base (16 cores ANSI), estilo Adwaita Dark do GNOME Terminal.
-ANSI_PALETTE = (
-    "#241f31", "#c01c28", "#2ec27e", "#f5c211",
-    "#1e78e4", "#9841bb", "#0ab9dc", "#c0bfbc",
-    "#5e5c64", "#ed333b", "#57e389", "#f8e45c",
-    "#51a1ff", "#c061cb", "#4fd2fd", "#f6f5f4",
-)
-DARK_FG, DARK_BG = "#ffffff", "#1d1d1d"
-LIGHT_FG, LIGHT_BG = "#1d1d1d", "#fafafa"
+#: Formas de cursor que o VTE aceita, na ordem em que aparecem na UI.
+CURSOR_SHAPES = {
+    "block": "BLOCK",
+    "ibeam": "IBEAM",
+    "underline": "UNDERLINE",
+}
 
 
 class TerminalTab(Gtk.Box):
@@ -55,10 +61,14 @@ class TerminalTab(Gtk.Box):
         "user-typed": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    def __init__(self, node: Node, resolved: dict[str, Any]) -> None:
+    def __init__(
+        self, node: Node, resolved: dict[str, Any], preferences: Any = None
+    ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.node = node
         self.resolved = dict(resolved)
+        self.preferences = preferences
+        self._reconnect_source = 0
         self.is_running = False
         self._pid = -1
         # A VTE emite "commit" também para o que entra por feed_child; sem este
@@ -87,6 +97,10 @@ class TerminalTab(Gtk.Box):
         self.terminal.connect("child-exited", self._on_child_exited)
         self.terminal.connect("commit", self._on_commit)
 
+        self._setup_actions()
+        self._setup_context_menu()
+        self._setup_shortcuts()
+
         scroller = Gtk.ScrolledWindow(
             hscrollbar_policy=Gtk.PolicyType.NEVER,
             vexpand=True,
@@ -102,6 +116,124 @@ class TerminalTab(Gtk.Box):
         self.connect("unrealize", self._on_unrealize)
         self.connect("map", self._on_first_map)
 
+    # -------------------------------------------------------- menu e atalhos
+
+    def _setup_actions(self) -> None:
+        """Ações do terminal, no grupo `term` — uma instância por aba."""
+        grupo = Gio.SimpleActionGroup()
+        for nome, handler in (
+            ("copy", lambda *_: self.copy_selection()),
+            ("paste", lambda *_: self.paste_clipboard()),
+            ("select-all", lambda *_: self.terminal.select_all()),
+            ("clear", lambda *_: self.clear()),
+            ("reconnect", lambda *_: self.reconnect()),
+            ("zoom-in", lambda *_: self.zoom(1.1)),
+            ("zoom-out", lambda *_: self.zoom(1 / 1.1)),
+            ("zoom-reset", lambda *_: self.zoom(None)),
+        ):
+            acao = Gio.SimpleAction.new(nome, None)
+            acao.connect("activate", handler)
+            grupo.add_action(acao)
+        self._actions = grupo
+        self.insert_action_group("term", grupo)
+
+        # "Copiar" só faz sentido com algo selecionado.
+        self.terminal.connect("selection-changed", self._on_selection_changed)
+        self._on_selection_changed()
+
+    def _on_selection_changed(self, *_args: object) -> None:
+        acao = self._actions.lookup_action("copy")
+        if acao is not None:
+            acao.set_enabled(self.terminal.get_has_selection())
+
+    def _setup_context_menu(self) -> None:
+        menu = Gio.Menu()
+
+        area = Gio.Menu()
+        area.append("Copiar", "term.copy")
+        area.append("Colar", "term.paste")
+        area.append("Selecionar tudo", "term.select-all")
+        menu.append_section(None, area)
+
+        zoom = Gio.Menu()
+        zoom.append("Aumentar", "term.zoom-in")
+        zoom.append("Diminuir", "term.zoom-out")
+        zoom.append("Tamanho normal", "term.zoom-reset")
+        menu.append_section(None, zoom)
+
+        sessao = Gio.Menu()
+        sessao.append("Limpar", "term.clear")
+        sessao.append("Reconectar", "term.reconnect")
+        sessao.append("Fechar aba", "win.close-tab")
+        menu.append_section(None, sessao)
+
+        self._popover = Gtk.PopoverMenu.new_from_model(menu)
+        self._popover.set_parent(self.terminal)
+        self._popover.set_has_arrow(False)
+        self._popover.set_halign(Gtk.Align.START)
+
+        gesto = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        gesto.connect("pressed", self._on_secondary_click)
+        self.terminal.add_controller(gesto)
+
+    def _on_secondary_click(
+        self, _gesto: Gtk.GestureClick, _n: int, x: float, y: float
+    ) -> None:
+        rect = Gdk.Rectangle()
+        rect.x, rect.y = int(x), int(y)
+        rect.width = rect.height = 1
+        self._popover.set_pointing_to(rect)
+        self._popover.popup()
+
+    def _setup_shortcuts(self) -> None:
+        """Atalhos no padrão de terminal (Ctrl+Shift+C/V).
+
+        Fase CAPTURE porque a VTE consome o teclado: sem isso o atalho nunca
+        chegaria até aqui.
+        """
+        controlador = Gtk.ShortcutController()
+        controlador.set_scope(Gtk.ShortcutScope.LOCAL)
+        controlador.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        for atalho, acao in (
+            ("<Primary><Shift>c", "term.copy"),
+            ("<Primary><Shift>v", "term.paste"),
+            ("<Primary><Shift>a", "term.select-all"),
+            ("<Primary>plus", "term.zoom-in"),
+            ("<Primary>equal", "term.zoom-in"),
+            ("<Primary>minus", "term.zoom-out"),
+            ("<Primary>0", "term.zoom-reset"),
+        ):
+            controlador.add_shortcut(
+                Gtk.Shortcut(
+                    trigger=Gtk.ShortcutTrigger.parse_string(atalho),
+                    action=Gtk.NamedAction.new(acao),
+                )
+            )
+        self.add_controller(controlador)
+
+    # ------------------------------------------------------- área de transferência
+
+    def copy_selection(self) -> None:
+        if self.terminal is not None and self.terminal.get_has_selection():
+            self.terminal.copy_clipboard_format(Vte.Format.TEXT)
+
+    def paste_clipboard(self) -> None:
+        if self.terminal is not None:
+            self.terminal.paste_clipboard()
+
+    def clear(self) -> None:
+        """Limpa a tela e o histórico, sem derrubar a sessão."""
+        if self.terminal is not None:
+            self.terminal.reset(False, True)
+
+    def zoom(self, fator: float | None) -> None:
+        """Ajusta o tamanho da fonte. `None` volta ao padrão."""
+        if self.terminal is None:
+            return
+        atual = self.terminal.get_font_scale()
+        novo = 1.0 if fator is None else max(0.5, min(4.0, atual * fator))
+        self.terminal.set_font_scale(novo)
+
     # ------------------------------------------------------------------ aparência
 
     def _apply_appearance(self) -> None:
@@ -112,17 +244,62 @@ class TerminalTab(Gtk.Box):
             self.terminal.set_scrollback_lines(int(scrollback))
         except (TypeError, ValueError):
             self.terminal.set_scrollback_lines(10000)
-        self.terminal.set_scroll_on_output(False)
-        self.terminal.set_scroll_on_keystroke(True)
+        self.terminal.set_scroll_on_output(bool(self.resolved.get("scroll_on_output")))
+        self.terminal.set_scroll_on_keystroke(
+            self.resolved.get("scroll_on_keystroke", True) is not False
+        )
         self.terminal.set_mouse_autohide(True)
+        self.terminal.set_audible_bell(bool(self.resolved.get("audible_bell")))
+        self._apply_font()
+        self._apply_cursor()
 
+        fg, bg = self._resolve_colors()
+        nome = str(self.resolved.get("palette_name") or PALETA_PADRAO)
+        cores = PALETAS.get(nome, PALETAS[PALETA_PADRAO])
+        self.terminal.set_colors(_rgba(fg), _rgba(bg), [_rgba(c) for c in cores])
+
+    def reload_appearance(self, resolved: dict[str, Any]) -> None:
+        """Troca a aparência de uma sessão viva, sem reconectar."""
+        self.resolved = dict(resolved)
+        if self.terminal is not None:
+            self._apply_appearance()
+
+    def _apply_font(self) -> None:
+        """Fonte do terminal. Sem valor definido, segue a fonte monoespaçada do sistema."""
+        assert self.terminal is not None
+        descricao = str(self.resolved.get("font") or "").strip()
+        if descricao:
+            self.terminal.set_font(Pango.FontDescription.from_string(descricao))
+        else:
+            self.terminal.set_font(None)
+
+    def _apply_cursor(self) -> None:
+        assert self.terminal is not None
+        forma = str(self.resolved.get("cursor_shape") or "block").lower()
+        self.terminal.set_cursor_shape(
+            getattr(Vte.CursorShape, CURSOR_SHAPES.get(forma, "BLOCK"))
+        )
+        piscar = self.resolved.get("cursor_blink", True) is not False
+        self.terminal.set_cursor_blink_mode(
+            Vte.CursorBlinkMode.ON if piscar else Vte.CursorBlinkMode.OFF
+        )
+
+    def _resolve_colors(self) -> tuple[str, str]:
+        """Cores do terminal: o esquema define a base, o nó pode sobrepor.
+
+        Assim uma pasta inteira ("Produção") pode ter fundo próprio, e cada
+        conexão herda — dá para reconhecer onde se está pela cor da tela.
+        """
         scheme = str(self.resolved.get("color_scheme") or "system").lower()
         dark = (
             Adw.StyleManager.get_default().get_dark() if scheme == "system" else scheme == "dark"
         )
-        fg, bg = (DARK_FG, DARK_BG) if dark else (LIGHT_FG, LIGHT_BG)
-        palette = [_rgba(color) for color in ANSI_PALETTE]
-        self.terminal.set_colors(_rgba(fg), _rgba(bg), palette)
+        return (
+            _cor_valida(self.resolved.get("foreground_color"))
+            or cor_padrao("foreground_color", dark),
+            _cor_valida(self.resolved.get("background_color"))
+            or cor_padrao("background_color", dark),
+        )
 
     # ------------------------------------------------------------------ execução
 
@@ -148,7 +325,7 @@ class TerminalTab(Gtk.Box):
             Vte.PtyFlags.DEFAULT,
             None,  # cwd: herda o do app
             argv,
-            None,  # envv: herda o ambiente
+            self._spawn_env(),
             GLib.SpawnFlags.DEFAULT,
             None,  # child_setup
             None,  # child_setup_data
@@ -157,6 +334,34 @@ class TerminalTab(Gtk.Box):
             self._on_spawned,
         )
         self.terminal.feed(f"\x1b[2mWarrenSSH: {describe(argv)}\x1b[0m\r\n".encode())
+
+    def _spawn_env(self) -> list[str] | None:
+        """Ambiente do ssh. `None` = herda o do app, sem senha automática.
+
+        A senha só entra quando há uma guardada no chaveiro E o host já teve a
+        chave aceita. Com host novo, o ssh precisa perguntar sobre a chave — e
+        essa pergunta também passaria pelo askpass, que se recusa a respondê-la.
+        """
+        if self.preferences is not None and not self.preferences.get_app(
+            "use_saved_passwords"
+        ):
+            return None
+        if not secrets.has_password(self.node.id) and not secrets.has_password(
+            self.node.id, kind=secrets.KIND_PASSPHRASE
+        ):
+            return None
+        if not is_known(self.resolved.get("host", ""), self.resolved.get("port")):
+            return None
+
+        helper = shutil.which("warrenssh-askpass")
+        if helper is None:
+            return None
+
+        ambiente = dict(os.environ)
+        ambiente["SSH_ASKPASS"] = helper
+        ambiente["SSH_ASKPASS_REQUIRE"] = "force"
+        ambiente[ENV_NODE_ID] = self.node.id
+        return [f"{chave}={valor}" for chave, valor in ambiente.items()]
 
     def _on_spawned(
         self, _terminal: object, pid: int, error: GLib.Error | None, *_user_data: object
@@ -178,6 +383,30 @@ class TerminalTab(Gtk.Box):
             "Sessão encerrada." if code == 0 else f"Sessão encerrada (código {code})."
         )
         self.emit("session-exited", code)
+        self._maybe_auto_reconnect(code)
+
+    def _maybe_auto_reconnect(self, code: int) -> None:
+        """Reconecta sozinho quando a sessão cai — não quando o usuário sai dela.
+
+        Código 0 é saída limpa (`exit`, `logout`): insistir aí seria brigar com
+        quem quis encerrar.
+        """
+        if code == 0 or self.preferences is None:
+            return
+        if not self.preferences.get_app("auto_reconnect"):
+            return
+        try:
+            espera = max(1, int(self.preferences.get_app("auto_reconnect_delay") or 3))
+        except (TypeError, ValueError):
+            espera = 3
+        self._show_banner(f"Sessão caiu. Reconectando em {espera}s…")
+        self._reconnect_source = GLib.timeout_add_seconds(espera, self._do_auto_reconnect)
+
+    def _do_auto_reconnect(self) -> bool:
+        self._reconnect_source = 0
+        if self.get_mapped():          # a aba ainda existe?
+            self.reconnect()
+        return False
 
     def reconnect(self) -> None:
         """Limpa a tela e sobe a sessão de novo."""
@@ -193,6 +422,9 @@ class TerminalTab(Gtk.Box):
 
     def close(self) -> None:
         """Encerra o processo filho, se houver."""
+        if self._reconnect_source:
+            GLib.source_remove(self._reconnect_source)
+            self._reconnect_source = 0
         if self.terminal is not None and self._pid > 0:
             try:
                 self.terminal.get_pty().close()
@@ -239,6 +471,14 @@ def _exit_code(status: int) -> int:
         return os.waitstatus_to_exitcode(status)
     except ValueError:  # status que o Python não sabe classificar
         return status
+
+
+def _cor_valida(valor: Any) -> str | None:
+    """Aceita a cor só se o GDK souber interpretá-la; senão, cai no padrão."""
+    if not valor:
+        return None
+    texto = str(valor).strip()
+    return texto if Gdk.RGBA().parse(texto) else None
 
 
 def _rgba(spec: str) -> Gdk.RGBA:

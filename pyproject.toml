@@ -11,13 +11,14 @@ requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Jorge Brants" }]
-dependencies = ["paramiko"]
+dependencies = []  # só biblioteca padrão do Python
 
 [project.optional-dependencies]
 dev = ["pytest"]
 
 [project.scripts]
 warrenssh = "warrenssh.main:main"
+warrenssh-askpass = "warrenssh.askpass:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -169,6 +169,10 @@ class Sidebar(Gtk.Box):
             if row is not None and row.get_expanded():
                 row.set_expanded(False)
 
+    def set_single_click(self, ativo: bool) -> None:
+        """Um clique conecta, em vez de dois."""
+        self._list_view.set_single_click_activate(ativo)
+
     def expand_roots(self) -> None:
         """Deixa as pastas de primeiro nível abertas — a árvore nasce legível."""
         for position in range(self._root_model.get_n_items()):

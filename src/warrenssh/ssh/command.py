@@ -80,6 +80,17 @@ def build_ssh_argv(
     if resolved.get("request_pty"):
         argv.append("-t")
 
+    # Keepalive: o que mantém a sessão viva atrás de NAT/firewall.
+    intervalo = _as_int(resolved.get("server_alive_interval"), "server_alive_interval")
+    if intervalo:
+        argv += ["-o", f"ServerAliveInterval={intervalo}"]
+
+    if resolved.get("forward_agent"):
+        argv.append("-A")
+
+    if resolved.get("compression"):
+        argv.append("-C")
+
     argv += _as_args(resolved.get("extra_ssh_args"))
 
     user = _clean(resolved.get("user"))
@@ -122,6 +133,19 @@ def _as_port(value: Any) -> int | None:
     if not 1 <= port <= 65535:
         raise CommandError(f"porta fora da faixa 1-65535: {port}")
     return port
+
+
+def _as_int(value: Any, campo: str) -> int | None:
+    """Inteiro positivo, ou None. Zero e vazio significam 'desligado'."""
+    if value in (None, "", False):
+        return None
+    try:
+        numero = int(value)
+    except (TypeError, ValueError) as exc:
+        raise CommandError(f"{campo} inválido: {value!r}") from exc
+    if numero < 0:
+        raise CommandError(f"{campo} não pode ser negativo: {numero}")
+    return numero or None
 
 
 def _as_args(value: Any) -> list[str]:

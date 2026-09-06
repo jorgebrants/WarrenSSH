@@ -14,7 +14,11 @@ from warrenssh.models.store import Store
 
 
 def resolve(node: Node, key: str, store: Store) -> Any:
-    """Valor efetivo de `key` para `node`, subindo a cadeia de herança."""
+    """Valor efetivo de `key` para `node`, subindo a cadeia de herança.
+
+    Só a árvore: o padrão global entra em `resolve_effective`/`resolve_all`, para
+    que o editor consiga distinguir "herdado do pai" de "veio do global".
+    """
     current: Node | None = node
     seen: set[str] = set()
     while current is not None and current.id not in seen:
@@ -52,6 +56,19 @@ def resolve_inherited(node: Node, key: str, store: Store) -> Any:
     return resolve(parent, key, store)
 
 
+def resolve_effective(node: Node, key: str, store: Store) -> Any:
+    """O valor que o app realmente usa: árvore → preferências globais → fábrica."""
+    valor = resolve(node, key, store)
+    if valor is not None:
+        return valor
+    preferencias = getattr(store, "preferences", None)
+    if preferencias is not None:
+        global_ = preferencias.default_for(key)
+        if global_ is not None:
+            return global_
+    return DEFAULTS.get(key)
+
+
 def resolve_all(node: Node, store: Store, *, with_defaults: bool = False) -> dict[str, Any]:
     """Dict efetivo do nó: chaves de conexão com valor, mais chaves extras locais."""
     keys = list(CONNECTION_KEYS)
@@ -62,9 +79,7 @@ def resolve_all(node: Node, store: Store, *, with_defaults: bool = False) -> dic
 
     resolved: dict[str, Any] = {}
     for key in keys:
-        value = resolve(node, key, store)
-        if value is None and with_defaults:
-            value = DEFAULTS.get(key)
+        value = resolve(node, key, store) if not with_defaults else resolve_effective(node, key, store)
         if value is not None:
             resolved[key] = value
     return resolved

@@ -22,6 +22,18 @@ CONNECTION_KEYS: tuple[str, ...] = (
     "charset",
     "scrollback_lines",
     "color_scheme",
+    "foreground_color",
+    "background_color",
+    "font",
+    "cursor_shape",
+    "cursor_blink",
+    "scroll_on_output",
+    "scroll_on_keystroke",
+    "audible_bell",
+    "palette_name",
+    "server_alive_interval",
+    "forward_agent",
+    "compression",
 )
 
 #: Valores usados quando a cascata não produz nada para a chave.
@@ -32,6 +44,13 @@ DEFAULTS: dict[str, Any] = {
     "charset": "UTF-8",
     "scrollback_lines": 10000,
     "color_scheme": "system",
+    "cursor_shape": "block",
+    "cursor_blink": True,
+    "scroll_on_output": False,
+    "scroll_on_keystroke": True,
+    "audible_bell": False,
+    "forward_agent": False,
+    "compression": False,
 }
 
 

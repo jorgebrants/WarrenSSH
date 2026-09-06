@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from warrenssh.models.node import Node
+from warrenssh.models.preferences import Preferences
 
 SCHEMA_VERSION = 1
 
@@ -23,9 +24,11 @@ def default_path() -> Path:
 class Store:
     """Mantém os nós indexados por id e cuida da ordem entre irmãos."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, preferences: Preferences | None = None) -> None:
         self.path = path or default_path()
         self._nodes: dict[str, Node] = {}
+        #: Topo da cascata: consultado quando ninguém na árvore definiu a chave.
+        self.preferences = preferences if preferences is not None else Preferences()
 
     # ------------------------------------------------------------------ acesso
 

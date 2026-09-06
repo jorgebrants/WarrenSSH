@@ -15,11 +15,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, GObject, Gtk  # noqa: E402
 
 from warrenssh.models.editing import (  # noqa: E402
     BOOL_FIELDS,
     CHOICE_FIELDS,
+    COLOR_FIELDS,
     FIELD_LABELS,
     EditingError,
     apply_edits,
@@ -190,6 +191,7 @@ class _FieldRow:
         self._had_value = key in node.properties
         self._touched = False
         self._syncing = False
+        self._limpo = False
 
         self.widget = self._build_row()
         self.switch: Gtk.Switch | None = None
@@ -216,6 +218,35 @@ class _FieldRow:
             row.set_activatable_widget(self._check)
             return row
 
+        if self.key in COLOR_FIELDS:
+            row = Adw.ActionRow(title=self.label)
+            # Amostra sólida da cor efetiva. O GTK esmaece widgets desabilitados,
+            # e num seletor de cor isso mostraria uma cor que não é a real —
+            # esta amostra nunca é desabilitada, então não mente.
+            self._swatch = Gtk.DrawingArea(
+                content_width=22, content_height=22, valign=Gtk.Align.CENTER
+            )
+            self._swatch.add_css_class("warrenssh-swatch")
+            self._swatch.set_draw_func(self._draw_swatch)
+            row.add_prefix(self._swatch)
+            self._color = Gtk.ColorDialogButton(
+                dialog=Gtk.ColorDialog(title=self.label, with_alpha=False),
+                valign=Gtk.Align.CENTER,
+            )
+            self._color.set_rgba(_rgba(self._draft or _cor_padrao(self.key)))
+            self._color.connect("notify::rgba", self._on_user_changed)
+            row.add_suffix(self._color)
+            # Um botão para voltar ao padrão: cor vazia = segue o esquema de cores.
+            self._limpar = Gtk.Button(
+                icon_name="edit-clear-symbolic",
+                tooltip_text="Usar a cor do esquema",
+                valign=Gtk.Align.CENTER,
+                has_frame=False,
+            )
+            self._limpar.connect("clicked", self._on_clear_color)
+            row.add_suffix(self._limpar)
+            return row
+
         if self.key in CHOICE_FIELDS:
             options = CHOICE_FIELDS[self.key]
             row = Adw.ComboRow(title=self.label, model=Gtk.StringList.new(list(options)))
@@ -239,6 +270,28 @@ class _FieldRow:
         """Distingue 'o usuário mexeu' de 'a UI se sincronizou sozinha'."""
         if not self._syncing:
             self._touched = True
+            self._limpo = False
+
+    def _draw_swatch(self, _area: Gtk.DrawingArea, cr: object, w: int, h: int) -> None:
+        cor = _rgba(self._cor_efetiva())
+        cr.set_source_rgb(cor.red, cor.green, cor.blue)  # type: ignore[attr-defined]
+        cr.rectangle(0, 0, w, h)  # type: ignore[attr-defined]
+        cr.fill()  # type: ignore[attr-defined]
+
+    def _cor_efetiva(self) -> str:
+        """A cor que o terminal vai usar: a do pai, a local, ou o padrão."""
+        if self.is_inherited():
+            return effective_placeholder(self.node, self.key, self.store) or _cor_padrao(self.key)
+        if self._limpo or not self._draft:
+            return _cor_padrao(self.key)
+        return self._draft
+
+    def _on_clear_color(self, *_args: object) -> None:
+        """Zera a cor local: o campo volta a seguir o esquema de cores."""
+        self._touched = True
+        self._limpo = True
+        self._draft = ""
+        self._sync()
 
     def is_inherited(self) -> bool:
         return self.switch is not None and self.switch.get_active()
@@ -255,6 +308,13 @@ class _FieldRow:
                 return None
             return self._draft_bool if self.is_inherited() else self._check.get_active()
 
+        if self.key in COLOR_FIELDS:
+            if not (self._had_value or self._touched) or self._limpo:
+                return None
+            if self.is_inherited():
+                return self._draft or None
+            return _hex(self._color.get_rgba())
+
         if self.key in CHOICE_FIELDS:
             if not (self._had_value or self._touched):
                 return None
@@ -270,6 +330,8 @@ class _FieldRow:
             # Guarda o que o usuário tinha digitado antes de mostrar o valor do pai.
             if self.key in BOOL_FIELDS:
                 self._draft_bool = self._check.get_active()
+            elif self.key in COLOR_FIELDS:
+                self._draft = "" if self._limpo else _hex(self._color.get_rgba())
             elif self.key in CHOICE_FIELDS:
                 item = self._combo.get_selected_item()
                 self._draft = item.get_string() if item is not None else ""
@@ -291,6 +353,17 @@ class _FieldRow:
 
         if self.switch is not None:
             self.switch.set_tooltip_text(self._inherit_tooltip(inherited))
+
+        if self.key in COLOR_FIELDS:
+            self._color.set_sensitive(not inherited)
+            self._limpar.set_sensitive(not inherited)
+            alvo = herdado if inherited else ("" if self._limpo else self._draft)
+            self._color.set_rgba(_rgba(alvo or _cor_padrao(self.key)))
+            origem = f"Herdado do pai: {herdado}" if inherited else ""
+            vazio = "Segue o esquema de cores" if not (alvo or inherited) else ""
+            self.widget.set_subtitle(origem or vazio)
+            self._swatch.queue_draw()
+            return
 
         if self.key in BOOL_FIELDS:
             self._check.set_sensitive(not inherited)
@@ -322,6 +395,29 @@ class _FieldRow:
         if origem is None:
             return "Herdando, mas nenhum ancestral define este campo"
         return f"Herdado de “{origem.name}”"
+
+
+#: Mostrado no seletor quando não há cor local — o que o terminal usaria.
+_PADRAO_COR = {"foreground_color": "#ffffff", "background_color": "#1d1d1d"}
+
+
+def _cor_padrao(key: str) -> str:
+    return _PADRAO_COR.get(key, "#000000")
+
+
+def _rgba(spec: str) -> Gdk.RGBA:
+    cor = Gdk.RGBA()
+    if not cor.parse(spec):
+        cor.parse("#000000")
+    return cor
+
+
+def _hex(cor: Gdk.RGBA) -> str:
+    return "#%02x%02x%02x" % (
+        round(cor.red * 255),
+        round(cor.green * 255),
+        round(cor.blue * 255),
+    )
 
 
 def _dim(widget: Gtk.Widget, dim: bool) -> None:
