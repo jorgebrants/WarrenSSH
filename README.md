@@ -112,6 +112,20 @@ print(m['info']['version']); print(w['url']); print(w['digests']['sha256'])
 "
 ```
 
+## Ícone
+
+A arte-fonte (1024×1024, fundo já removido) fica em
+`packaging/icons/io.github.jorgebrants.WarrenSSH.source.png`. Os tamanhos do
+tema hicolor saem dela:
+
+```python
+from PIL import Image
+base = Image.open("packaging/icons/io.github.jorgebrants.WarrenSSH.source.png")
+for t in (16, 24, 32, 48, 64, 128, 256, 512):
+    base.resize((t, t), Image.LANCZOS).save(
+        f"packaging/icons/{t}x{t}/io.github.jorgebrants.WarrenSSH.png", optimize=True)
+```
+
 ## Atalhos
 
 | Atalho | Ação |

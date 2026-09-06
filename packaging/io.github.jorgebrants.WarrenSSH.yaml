@@ -25,6 +25,26 @@ finish-args:
   # sandbox — não precisamos de acesso ao host. O fallback via flatpak-spawn
   # existe no código (ssh/command.py) só para ambientes onde ele falte.
 
+# Nada disso vai para o pacote final: artefatos de desenvolvimento das
+# bibliotecas compiladas e executáveis que vêm de carona nas dependências.
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /lib/cmake
+  - /share/gtk-doc
+  - /share/man
+  - /share/vala
+  - '*.a'
+  - '*.la'
+  # app de demonstração que acompanha o VTE
+  - /bin/vte-2.91-gtk4
+  - /share/applications/org.gnome.Vte.App.Gtk4.desktop
+  - /share/metainfo/org.gnome.Vte.App.Gtk4.metainfo.xml
+  # CLIs que vêm com invoke e cffi, dependências do paramiko
+  - /bin/inv
+  - /bin/invoke
+  - /bin/cffi-gen-src
+
 modules:
   # O runtime GNOME NÃO traz o VTE (confirmado no Platform e no SDK 50), então o
   # motor do terminal vem compilado aqui — é o que fazem os outros terminais em
@@ -100,8 +120,10 @@ modules:
           ${FLATPAK_DEST}/share/applications/io.github.jorgebrants.WarrenSSH.desktop
       - install -Dm644 packaging/io.github.jorgebrants.WarrenSSH.metainfo.xml
           ${FLATPAK_DEST}/share/metainfo/io.github.jorgebrants.WarrenSSH.metainfo.xml
-      - install -Dm644 src/warrenssh/data/icons/io.github.jorgebrants.WarrenSSH.svg
-          ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.jorgebrants.WarrenSSH.svg
+      - for s in 16 24 32 48 64 128 256 512; do install -Dm644
+          packaging/icons/${s}x${s}/io.github.jorgebrants.WarrenSSH.png
+          ${FLATPAK_DEST}/share/icons/hicolor/${s}x${s}/apps/io.github.jorgebrants.WarrenSSH.png;
+          done
     sources:
       - type: dir
         path: ..

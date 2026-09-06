@@ -23,7 +23,7 @@ warrenssh = "warrenssh.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-warrenssh = ["data/*.css", "data/icons/*.svg"]
+warrenssh = ["data/*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
