@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warrenssh"
+version = "0.1.0"
+description = "Gerenciador de conexões SSH para Linux com árvore de herança e terminal nativo"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Jorge Brants" }]
+dependencies = ["paramiko"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+warrenssh = "warrenssh.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+warrenssh = ["data/*.css", "data/icons/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

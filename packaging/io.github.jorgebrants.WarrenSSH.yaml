@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Manifesto Flatpak do WarrenSSH.
+# O runtime GNOME já traz GTK4, libadwaita, VTE e libsecret — só precisamos
+# acrescentar o parser de ssh_config (paramiko) e o próprio app.
+app-id: io.github.jorgebrants.WarrenSSH
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: warrenssh
+
+finish-args:
+  # Sessão gráfica.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # SSH precisa de rede e, para chaves já carregadas, do agente do usuário.
+  - --share=network
+  - --socket=ssh-auth
+  # Chaves e ~/.ssh/config: leitura apenas, é tudo o que o app faz com eles.
+  - --filesystem=~/.ssh:ro
+  # Senhas e passphrases no chaveiro do sistema (libsecret).
+  - --talk-name=org.freedesktop.secrets
+  # O runtime GNOME 50 traz o próprio `ssh` (OpenSSH 10.4), verificado no
+  # sandbox — não precisamos de acesso ao host. O fallback via flatpak-spawn
+  # existe no código (ssh/command.py) só para ambientes onde ele falte.
+
+modules:
+  # O runtime GNOME NÃO traz o VTE (confirmado no Platform e no SDK 50), então o
+  # motor do terminal vem compilado aqui — é o que fazem os outros terminais em
+  # Flatpak. O SDK já tem tudo de que o VTE precisa, menos o simdutf.
+  - name: simdutf
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_LIBDIR=lib
+      - -DBUILD_SHARED_LIBS=ON
+      - -DSIMDUTF_TESTS=OFF
+      - -DSIMDUTF_BENCHMARKS=OFF
+      - -DSIMDUTF_TOOLS=OFF
+    sources:
+      - type: archive
+        url: https://github.com/simdutf/simdutf/archive/refs/tags/v9.1.0.tar.gz
+        sha256: 24e3510a4c95a9e6eb0fb4a27eea650d13773231cbd8b564ed9670aa5484d193
+
+  - name: vte
+    buildsystem: meson
+    config-opts:
+      - --libdir=lib
+      - -Dgtk3=false
+      - -Dgtk4=true
+      - -Dgir=true          # o typelib Vte-3.91 é o que o PyGObject consome
+      - -Dvapi=false
+      - -Ddocs=false
+      - -D_b_symbolic_functions=false
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/vte/0.84/vte-0.84.1.tar.xz
+        sha256: aca1caa8478aebcdbb1d67897fb3511eb7601debae6810e16a15b6fa25f31ac8
+
+  # Usamos só o parser de ssh_config (paramiko.config), mas importar qualquer
+  # submódulo executa o paramiko/__init__.py, que puxa o transporte inteiro.
+  # Por isso as dependências binárias vêm junto. As wheels são abi3/manylinux,
+  # então não precisam de compilador — mas SÃO específicas de arquitetura:
+  # para aarch64, acrescente as wheels equivalentes com `only-arches`.
+  - name: python3-paramiko
+    buildsystem: simple
+    only-arches:
+      - x86_64
+    build-commands:
+      - pip3 install --no-index --no-deps --prefix=${FLATPAK_DEST} ./*.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/82/5b/eadf6d45de38d30ab603f49393b6cd2cbe7e233af8cf90197e32782b68a9/paramiko-5.0.0-py3-none-any.whl
+        sha256: b7044611c30140d9a75261653210e2002977b71a0497ff3ba0d98d7edbf62f7c
+      - type: file
+        url: https://files.pythonhosted.org/packages/57/26/e6d4fc8512a51a5f9ee7bfdbfb853bce1197087df40c9ad993ad370b846f/cryptography-50.0.1-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: ff838d62ec1bfce4f9ba7fa16f4a7b554cd8d0c299e6be37502161a660c84eef
+      - type: file
+        url: https://files.pythonhosted.org/packages/3b/71/427945e6ead72ccffe77894b2655b695ccf14ae1866cd977e185d606dd2f/bcrypt-5.0.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 560ddb6ec730386e7b3b26b8b4c88197aaed924430e7b74666a586ac997249ef
+      - type: file
+        url: https://files.pythonhosted.org/packages/7f/81/d60984052df5c97b1d24365bc1e30024379b42c4edcd79d2436b1b9806f2/pynacl-1.6.2-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 22de65bb9010a725b0dac248f353bb072969c94fa8d6b1f34b87d7953cf7bbe4
+      - type: file
+        url: https://files.pythonhosted.org/packages/5a/de/bbc12563bbf979618d17625a4e753ff7a078523e28d870d3626daa97261a/invoke-3.0.3-py3-none-any.whl
+        sha256: f11327165e5cbb89b2ad1d88d3292b5113332c43b8553b494da435d6ec6f5053
+      - type: file
+        url: https://files.pythonhosted.org/packages/95/95/86342356ff5953b3fb06f7ef7c5bee212d45e770abc7218d451b9148313c/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2
+      - type: file
+        url: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
+        sha256: b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+
+  - name: warrenssh
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-deps --no-build-isolation --prefix=${FLATPAK_DEST} .
+      - install -Dm644 packaging/io.github.jorgebrants.WarrenSSH.desktop
+          ${FLATPAK_DEST}/share/applications/io.github.jorgebrants.WarrenSSH.desktop
+      - install -Dm644 packaging/io.github.jorgebrants.WarrenSSH.metainfo.xml
+          ${FLATPAK_DEST}/share/metainfo/io.github.jorgebrants.WarrenSSH.metainfo.xml
+      - install -Dm644 src/warrenssh/data/icons/io.github.jorgebrants.WarrenSSH.svg
+          ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.jorgebrants.WarrenSSH.svg
+    sources:
+      - type: dir
+        path: ..

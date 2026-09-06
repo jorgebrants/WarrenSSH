@@ -1,0 +1,61 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* WarrenSSH — estilo base. Só o que o GTK CSS suporta, sem hacks.
+   As cores de acento vêm de um provider separado (ui/theme.py), porque
+   dependem do tema claro/escuro em uso. */
+
+/* --------------------------------------------------------------- sidebar */
+
+.warrenssh-sidebar {
+  background-color: mix(@window_bg_color, @accent_bg_color, 0.035);
+}
+
+.warrenssh-sidebar listview {
+  background: transparent;
+  padding: 2px 4px;
+}
+
+.warrenssh-sidebar listview > row {
+  border-radius: 8px;
+  margin: 1px 2px;
+  padding: 6px 4px;
+}
+
+.warrenssh-sidebar listview > row:selected {
+  background-color: alpha(@accent_bg_color, 0.16);
+  color: @window_fg_color;
+}
+
+.warrenssh-sidebar listview > row:hover:not(:selected) {
+  background-color: alpha(@window_fg_color, 0.05);
+}
+
+.warrenssh-sidebar entry.search {
+  border-radius: 8px;
+}
+
+/* -------------------------------------------------------------- terminal */
+
+.warrenssh-terminal {
+  padding: 6px 8px;
+}
+
+/* Aba em broadcast: contorno de acento, para não digitar em 40 servidores
+   sem perceber. */
+.warrenssh-broadcast {
+  /* O padding é o que revela a sombra interna: sem ele os filhos a cobrem. */
+  padding: 2px;
+  box-shadow: inset 0 0 0 2px @accent_bg_color;
+}
+
+/* ------------------------------------------------------------------ abas */
+
+tabbar .box {
+  background-color: mix(@window_bg_color, @accent_bg_color, 0.02);
+}
+
+/* ---------------------------------------------------------------- editor */
+
+/* Campo herdado: o cinza é a pista de "este valor não é seu". */
+.dim-label {
+  opacity: 0.62;
+}

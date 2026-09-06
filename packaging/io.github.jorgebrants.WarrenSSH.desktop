@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=WarrenSSH
+GenericName=Gerenciador de conexões SSH
+Comment=Organize conexões SSH em árvore com herança de configuração
+Exec=warrenssh
+Icon=io.github.jorgebrants.WarrenSSH
+Terminal=false
+Type=Application
+Categories=Network;RemoteAccess;
+Keywords=ssh;terminal;remote;servidor;conexão;
+StartupNotify=true
+StartupWMClass=io.github.jorgebrants.WarrenSSH

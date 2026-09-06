@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.flatpak-builder/
+repo/
+
+# Bundles gerados pelo flatpak build-bundle
+*.flatpak
+
+# Documento de planejamento (uso interno, não vai para o repositório público)
+warrenssh-plano-de-desenvolvimento.md

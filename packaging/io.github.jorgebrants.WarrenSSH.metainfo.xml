@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.jorgebrants.WarrenSSH</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <developer id="io.github.jorgebrants">
+    <name>Jorge Brants</name>
+  </developer>
+
+  <url type="homepage">https://github.com/jorgebrants/WarrenSSH</url>
+  <url type="bugtracker">https://github.com/jorgebrants/WarrenSSH/issues</url>
+  <url type="vcs-browser">https://github.com/jorgebrants/WarrenSSH</url>
+
+  <name>WarrenSSH</name>
+  <summary>Gerenciador de conexões SSH com herança de configuração</summary>
+
+  <description>
+    <p>
+      WarrenSSH organiza suas conexões SSH numa árvore de pastas onde cada
+      propriedade pode ter valor próprio ou herdar do pai. Definiu o bastion na
+      pasta? As quarenta conexões dentro dela passam a usá-lo. Trocou o bastion?
+      Um lugar só.
+    </p>
+    <p>Recursos:</p>
+    <ul>
+      <li>Terminal nativo VTE, o mesmo motor do GNOME Terminal</li>
+      <li>Herança de configuração explícita: cada campo mostra de onde veio o valor</li>
+      <li>Abas de sessão, com broadcast para operar vários servidores de uma vez</li>
+      <li>Importação do ~/.ssh/config</li>
+      <li>Senhas e passphrases no chaveiro do sistema, nunca em arquivo</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.jorgebrants.WarrenSSH.desktop</launchable>
+
+  <categories>
+    <category>Network</category>
+    <category>System</category>
+  </categories>
+
+  <keywords>
+    <keyword>ssh</keyword>
+    <keyword>terminal</keyword>
+    <keyword>servidor</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-05">
+      <description>
+        <p>Primeira versão: árvore com herança, terminal VTE, editor de
+        propriedades, importação do ssh_config, chaveiro e broadcast.</p>
+      </description>
+    </release>
+  </releases>
+</component>
