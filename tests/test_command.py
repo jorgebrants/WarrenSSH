@@ -222,3 +222,26 @@ def test_ordem_com_as_opcoes_novas():
         "-o", "ServerAliveInterval=60", "-A", "-C",
         "-o", "ConnectTimeout=5", "op@srv",
     ]
+
+
+def test_tuneis_entram_no_argv():
+    argv = build_ssh_argv(
+        {
+            "host": "srv",
+            "tunnels": [
+                {"type": "local", "listen_port": 5432, "host": "localhost", "host_port": 5432},
+                {"type": "dynamic", "listen_port": 1080},
+            ],
+        },
+        ssh_binary="ssh",
+    )
+    assert argv == ["ssh", "-L", "5432:localhost:5432", "-D", "1080", "srv"]
+
+
+def test_tunel_invalido_vira_erro_de_comando():
+    """O erro precisa aparecer antes de o ssh recusar a conexão inteira."""
+    with pytest.raises(CommandError):
+        build_ssh_argv(
+            {"host": "srv", "tunnels": [{"type": "local", "listen_port": 99999}]},
+            ssh_binary="ssh",
+        )

@@ -45,6 +45,8 @@ class Sidebar(Gtk.Box):
         "connection-activated": (GObject.SignalFlags.RUN_FIRST, None, (object,)),
         # Emitido quando a seleção muda (None quando nada está selecionado).
         "node-selected": (GObject.SignalFlags.RUN_FIRST, None, (object,)),
+        # Emitido quando a árvore foi reorganizada e precisa ser salva.
+        "tree-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
     def __init__(self, store: Store) -> None:
@@ -59,6 +61,8 @@ class Sidebar(Gtk.Box):
             self._create_children_model,
         )
         self._search_text = ""
+        #: Ids das conexões com sessão aberta, para marcar na árvore.
+        self._ativos: set[str] = set()
         self._filter = Gtk.CustomFilter.new(self._match_row)
         self._filter_model = Gtk.FilterListModel(model=self._tree_model, filter=self._filter)
         self._selection = Gtk.SingleSelection(model=self._filter_model, autoselect=False)
@@ -77,6 +81,12 @@ class Sidebar(Gtk.Box):
         criar.append("Nova pasta", "win.new-folder")
         criar.append("Nova conexão", "win.new-connection")
         self._menu.append_section(None, criar)
+        organizar = Gio.Menu()
+        organizar.append("Duplicar", "win.duplicate-node")
+        organizar.append("Mover para cima", "win.move-up")
+        organizar.append("Mover para baixo", "win.move-down")
+        self._menu.append_section(None, organizar)
+
         editar = Gio.Menu()
         editar.append("Editar…", "win.edit-node")
         editar.append("Excluir", "win.delete-node")
@@ -198,9 +208,13 @@ class Sidebar(Gtk.Box):
     def _on_factory_setup(self, _factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         icon = Gtk.Image()
-        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        label = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, hexpand=True)
+        # Ponto que acende quando a conexão tem sessão aberta.
+        status = Gtk.Image(icon_name="media-record-symbolic", visible=False)
+        status.add_css_class("warrenssh-ativo")
         box.append(icon)
         box.append(label)
+        box.append(status)
 
         expander = Gtk.TreeExpander(child=box)
         item.set_child(expander)
@@ -210,6 +224,15 @@ class Sidebar(Gtk.Box):
         gesture.connect("pressed", self._on_row_secondary_click, item)
         expander.add_controller(gesture)
 
+        # Arrastar para reorganizar a árvore.
+        origem = Gtk.DragSource(actions=Gdk.DragAction.MOVE)
+        origem.connect("prepare", self._on_drag_prepare, item)
+        expander.add_controller(origem)
+
+        destino = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
+        destino.connect("drop", self._on_drop, item)
+        expander.add_controller(destino)
+
     def _on_factory_bind(self, _factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
         expander = item.get_child()
         row = item.get_item()  # Gtk.TreeListRow
@@ -217,10 +240,16 @@ class Sidebar(Gtk.Box):
 
         node = row.get_item().node
         box = expander.get_child()
-        icon, label = box.get_first_child(), box.get_last_child()
+        icon = box.get_first_child()
+        label = icon.get_next_sibling()
+        status = box.get_last_child()
         icon.set_from_icon_name(FOLDER_ICON if node.kind == "folder" else CONNECTION_ICON)
         label.set_text(node.name)
         label.set_tooltip_text(_row_tooltip(node))
+
+        ativo = node.id in self._ativos
+        status.set_visible(ativo)
+        status.set_tooltip_text("Sessão aberta" if ativo else None)
 
     # -------------------------------------------------------------------- eventos
 
@@ -253,6 +282,84 @@ class Sidebar(Gtk.Box):
         rect.width = rect.height = 1
         self._popover.set_pointing_to(rect)
         self._popover.popup()
+
+    def _on_drag_prepare(
+        self, _origem: Gtk.DragSource, _x: float, _y: float, item: Gtk.ListItem
+    ) -> Gdk.ContentProvider | None:
+        """O que está sendo arrastado: o id do nó."""
+        linha = item.get_item()
+        if linha is None:
+            return None
+        return Gdk.ContentProvider.new_for_value(linha.get_item().node.id)
+
+    def _on_drop(
+        self, _destino: Gtk.DropTarget, valor: object, _x: float, _y: float, item: Gtk.ListItem
+    ) -> bool:
+        """Solta o nó arrastado sobre este: dentro da pasta, ou ao lado da conexão."""
+        arrastado = self._store.get(str(valor))
+        linha = item.get_item()
+        if arrastado is None or linha is None:
+            return False
+        alvo = linha.get_item().node
+        if alvo.id == arrastado.id:
+            return False
+
+        if alvo.kind == "folder":
+            novo_pai, posicao = alvo.id, None          # cai dentro da pasta
+        else:
+            novo_pai, posicao = alvo.parent_id, alvo.position  # ao lado da conexão
+
+        try:
+            self._store.move(arrastado.id, novo_pai, posicao)
+        except (ValueError, KeyError):
+            return False       # mover para dentro de si mesmo, por exemplo
+
+        self.reload()
+        self.select_node_id(arrastado.id)
+        self.emit("tree-changed")
+        return True
+
+    def move_selected(self, delta: int) -> bool:
+        """Sobe (-1) ou desce (+1) o nó selecionado entre os irmãos."""
+        node = self.selected_node()
+        if node is None:
+            return False
+        irmaos = self._store.children(node.parent_id)
+        indice = next((i for i, n in enumerate(irmaos) if n.id == node.id), None)
+        destino = (indice or 0) + delta
+        if indice is None or not 0 <= destino < len(irmaos):
+            return False
+        self._store.move(node.id, node.parent_id, destino)
+        self.reload()
+        self.select_node_id(node.id)
+        self.emit("tree-changed")
+        return True
+
+    def set_active_nodes(self, ids: set[str]) -> None:
+        """Marca na árvore quais conexões estão com sessão aberta.
+
+        Atualiza só os indicadores das linhas já montadas: um `reload()` aqui
+        recolheria as pastas abertas a cada sessão que sobe ou cai.
+        """
+        if ids == self._ativos:
+            return
+        self._ativos = set(ids)
+        self._atualizar_indicadores()
+
+    def _atualizar_indicadores(self) -> None:
+        linha = self._list_view.get_first_child()
+        while linha is not None:
+            expander = linha.get_first_child()
+            if isinstance(expander, Gtk.TreeExpander):
+                caixa = expander.get_child()
+                treerow = expander.get_list_row()
+                if caixa is not None and treerow is not None:
+                    node = treerow.get_item().node
+                    status = caixa.get_last_child()
+                    ativo = node.id in self._ativos
+                    status.set_visible(ativo)
+                    status.set_tooltip_text("Sessão aberta" if ativo else None)
+            linha = linha.get_next_sibling()
 
     def _on_selection_changed(self, *_args: object) -> None:
         self.emit("node-selected", self.selected_node())

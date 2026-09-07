@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -13,6 +15,13 @@ from warrenssh.models.node import Node
 from warrenssh.models.preferences import Preferences
 
 SCHEMA_VERSION = 1
+
+#: Quantas cópias antigas da árvore manter ao lado do arquivo.
+BACKUPS_MANTIDOS = 3
+
+
+class StoreError(RuntimeError):
+    """Problema ao ler a árvore que o usuário precisa saber."""
 
 
 def default_path() -> Path:
@@ -152,20 +161,76 @@ class Store:
                 node.parent_id = None
 
     def load_json(self, path: Path | None = None) -> None:
-        """Carrega do disco. Arquivo ausente = árvore vazia (primeira execução)."""
+        """Carrega do disco. Arquivo ausente = árvore vazia (primeira execução).
+
+        Um arquivo ilegível não pode impedir o app de abrir — mas também não
+        pode ser silenciosamente sobrescrito por uma árvore vazia. Então ele é
+        posto de lado com um nome datado, tentamos o backup mais recente, e o
+        problema sobe como `StoreError` para virar aviso na tela.
+        """
         target = path or self.path
         try:
             raw = target.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        except (FileNotFoundError, IsADirectoryError):
             self._nodes = {}
             return
-        self.load_dict(json.loads(raw))
+
+        try:
+            self.load_dict(json.loads(raw))
+            return
+        except (json.JSONDecodeError, TypeError, AttributeError, KeyError, ValueError) as exc:
+            self._nodes = {}
+            quarentena = self._por_em_quarentena(target)
+            recuperado = self._tentar_backups(target)
+            if recuperado is not None:
+                raise StoreError(
+                    f"O arquivo da árvore estava ilegível e foi guardado em "
+                    f"{quarentena.name}. Recuperei a cópia de {recuperado.name}."
+                ) from exc
+            raise StoreError(
+                f"O arquivo da árvore estava ilegível ({exc}). Ele foi guardado em "
+                f"{quarentena.name} e comecei com uma árvore vazia."
+            ) from exc
+
+    def _por_em_quarentena(self, target: Path) -> Path:
+        """Tira o arquivo ruim do caminho, sem apagá-lo."""
+        carimbo = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destino = target.with_name(f"{target.name}.ilegivel-{carimbo}")
+        try:
+            shutil.move(str(target), str(destino))
+        except OSError:
+            pass
+        return destino
+
+    def _tentar_backups(self, target: Path) -> Path | None:
+        """Carrega o backup mais recente que ainda faça sentido."""
+        for backup in self._backups(target):
+            try:
+                self.load_dict(json.loads(backup.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError, TypeError, AttributeError, ValueError):
+                continue
+            return backup
+        return None
+
+    @staticmethod
+    def _backups(target: Path) -> list[Path]:
+        """Backups do mais novo para o mais antigo."""
+        try:
+            achados = sorted(
+                target.parent.glob(f"{target.name}.bak*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return []
+        return achados
 
     def save_json(self, path: Path | None = None) -> None:
         """Grava de forma atômica (tmp + rename) para não perder a árvore num crash."""
         target = path or self.path
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
+        self._rotacionar_backups(target)
         fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".tree-", suffix=".json")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -176,3 +241,103 @@ class Store:
         except BaseException:
             Path(tmp_name).unlink(missing_ok=True)
             raise
+
+    def duplicate(self, node_id: str) -> Node | None:
+        """Copia um nó (e a subárvore, se for pasta) ao lado do original."""
+        original = self.get(node_id)
+        if original is None:
+            return None
+
+        copia = self._copiar(original, original.parent_id, sufixo=" (cópia)")
+        self.move(copia.id, copia.parent_id, position=original.position + 1)
+        return copia
+
+    def _copiar(self, node: Node, parent_id: str | None, sufixo: str = "") -> Node:
+        import uuid
+
+        novo = Node(
+            id=str(uuid.uuid4()),
+            parent_id=parent_id,
+            kind=node.kind,
+            name=node.name + sufixo,
+            properties=dict(node.properties),
+            inherited=set(node.inherited),
+            position=node.position,
+        )
+        self._nodes[novo.id] = novo
+        for filho in self.children(node.id):
+            self._copiar(filho, novo.id)
+        return novo
+
+    # ------------------------------------------------------------ exportar
+
+    def export_json(self, path: Path | str) -> None:
+        """Grava a árvore num arquivo à escolha, para backup ou para levar embora.
+
+        Só a estrutura: senhas ficam no chaveiro e não saem daqui.
+        """
+        destino = Path(path)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(
+            json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def import_json(self, path: Path | str, *, replace: bool = False) -> list[Node]:
+        """Traz nós de um arquivo exportado. Devolve o que entrou.
+
+        Sem `replace`, os nós chegam com ids novos e vão para o fim da árvore —
+        assim importar duas vezes não sobrescreve nada nem colide com ids
+        existentes.
+        """
+        origem = Path(path)
+        try:
+            dados = json.loads(origem.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StoreError(f"Não deu para ler {origem.name}: {exc}") from exc
+
+        brutos = dados.get("nodes") if isinstance(dados, dict) else None
+        if not isinstance(brutos, list):
+            raise StoreError(f"{origem.name} não parece uma árvore do WarrenSSH.")
+
+        if replace:
+            self.load_dict(dados)
+            return list(self._nodes.values())
+
+        return self._mesclar(brutos)
+
+    def _mesclar(self, brutos: list[Any]) -> list[Node]:
+        """Insere os nós com ids novos, preservando a hierarquia entre eles."""
+        import uuid
+
+        traducao: dict[str, str] = {}
+        importados: list[Node] = []
+        for bruto in brutos:
+            try:
+                node = Node.from_dict(bruto)
+            except (KeyError, TypeError, ValueError):
+                continue  # linha estragada não invalida o arquivo inteiro
+            antigo, node.id = node.id, str(uuid.uuid4())
+            traducao[antigo] = node.id
+            importados.append(node)
+
+        for node in importados:
+            # pai fora do lote importado vira raiz, para nada ficar órfão
+            node.parent_id = traducao.get(node.parent_id or "", None)
+            self._nodes[node.id] = node
+
+        for parent_id in {n.parent_id for n in importados}:
+            self._reindex(parent_id)
+        return importados
+
+    def _rotacionar_backups(self, target: Path) -> None:
+        """Guarda a versão atual antes de sobrescrever, mantendo as N últimas."""
+        if not target.exists():
+            return
+        carimbo = datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            shutil.copy2(target, target.with_name(f"{target.name}.bak-{carimbo}"))
+        except OSError:
+            return  # não poder fazer backup não pode impedir de salvar
+        for antigo in self._backups(target)[BACKUPS_MANTIDOS:]:
+            antigo.unlink(missing_ok=True)

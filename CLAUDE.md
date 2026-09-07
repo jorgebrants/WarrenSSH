@@ -40,6 +40,13 @@ linha, com:
 chaveiro pelo stdout. `TerminalTab._spawn_env()` só o ativa quando há segredo E
 `known_hosts.is_known(host, port)` — ver ssh/known_hosts.py.
 
+## Tema
+O botão do canto superior direito (`win.toggle-theme`, Ctrl+Shift+B) grava
+`app.theme` como `light`/`dark` — vira escolha explícita, e Preferências devolve
+o "seguir o sistema". O ícone mostra o tema de DESTINO, não o atual, e é
+atualizado tanto por `_apply_preferences()` quanto pelo `notify::dark` do
+StyleManager (o sistema pode mudar sozinho, ex. agendamento noturno).
+
 ## Herança (conceito central)
 Cada propriedade de um nó ou tem valor local ou herda do pai (set `inherited`).
 Resolução sobe a árvore até achar valor não-herdado. Ver models/resolver.py.
@@ -51,6 +58,26 @@ A cascata completa é: **conexão → pasta → raiz → preferências globais �
   preferências e depois com os padrões de fábrica.
 - `Store.preferences` é o objeto `Preferences`; quem monta um Store à mão em
   teste ganha um padrão vazio.
+
+## Import do mRemoteNG (ssh/mremoteng.py)
+Containers do mRemoteNG trazem os padrões do protocolo deles (normalmente RDP,
+com `Port=3389`): NÃO importar propriedades de container, ou as conexões SSH
+herdam a porta errada. Os valores comuns das pastas vêm de `apply_inheritance()`,
+que olha as conexões reais e promove o dominante (limiar de 60%). Senhas são
+cifradas com AES e ficam de fora — só são contadas.
+
+## Túneis (ssh/tunnels.py)
+Guardados como dicionários (`type`, `listen_port`, `host`, `host_port`, `bind`),
+não como a string do ssh — a UI edita campo a campo e valida antes de conectar,
+porque uma sintaxe errada faz o ssh recusar a conexão inteira. `tunnels` é chave
+herdável como qualquer outra.
+
+## Arquivo da árvore
+`load_json` nunca deixa o app quebrar: arquivo ilegível vai para
+`tree.json.ilegivel-<data>`, tenta-se o backup mais recente e sobe um
+`StoreError` para virar aviso. `save_json` rotaciona 3 backups antes de gravar.
+`export_json`/`import_json` movem a estrutura entre máquinas; o import gera ids
+novos, então importar duas vezes não colide nem sobrescreve.
 
 ## Preferências (models/preferences.py, ui/preferences.py)
 Dois blocos no mesmo arquivo JSON (`~/.config/warrenssh/preferences.json`):
@@ -91,6 +118,9 @@ packaging/  manifesto flatpak, .desktop, metainfo
 - O GTK esmaece todo widget desabilitado. Num seletor de cor isso exibe uma cor
   falsa: por isso a linha de cor tem uma `Gtk.DrawingArea` ao lado, que mostra a
   cor efetiva de verdade e nunca é desabilitada.
+- `Sidebar.set_active_nodes()` atualiza os indicadores percorrendo as linhas já
+  montadas. Um `reload()` ali recolheria as pastas abertas a cada sessão que
+  sobe ou cai.
 - Popovers e `Adw.Dialog` exigem grab de foco: no display de teste (sem WM
   dando foco) eles existem e respondem por API, mas não aparecem em capturas de
   tela. Validar por estrutura/estado, não por screenshot.

@@ -21,6 +21,7 @@ from warrenssh.models.editing import (  # noqa: E402
     BOOL_FIELDS,
     CHOICE_FIELDS,
     COLOR_FIELDS,
+    TUNNEL_FIELDS,
     FIELD_LABELS,
     EditingError,
     apply_edits,
@@ -218,6 +219,9 @@ class _FieldRow:
             row.set_activatable_widget(self._check)
             return row
 
+        if self.key in TUNNEL_FIELDS:
+            return self._build_tunnels_row()
+
         if self.key in COLOR_FIELDS:
             row = Adw.ActionRow(title=self.label)
             # Amostra sólida da cor efetiva. O GTK esmaece widgets desabilitados,
@@ -272,6 +276,94 @@ class _FieldRow:
             self._touched = True
             self._limpo = False
 
+    def _build_tunnels_row(self) -> Adw.PreferencesRow:
+        """Lista de túneis, um por linha, com um formulário para acrescentar."""
+        from warrenssh.ssh.tunnels import DYNAMIC, ROTULOS, TIPOS
+
+        self._tuneis: list[dict[str, Any]] = [
+            dict(t) for t in (self.node.properties.get(self.key) or [])
+        ]
+
+        linha = Adw.ExpanderRow(title=self.label, subtitle=self._resumo_tuneis())
+        self._expander = linha
+
+        adicionar = Adw.ActionRow(title="Acrescentar")
+        self._tipo = Gtk.DropDown.new_from_strings([ROTULOS[t] for t in TIPOS])
+        self._tipo.set_valign(Gtk.Align.CENTER)
+        self._tipo.connect("notify::selected", lambda *_: self._atualizar_dica())
+        self._spec = Gtk.Entry(
+            placeholder_text="5432:localhost:5432", valign=Gtk.Align.CENTER, hexpand=True
+        )
+        self._spec.connect("activate", lambda *_: self._acrescentar_tunel())
+        mais = Gtk.Button(icon_name="list-add-symbolic", valign=Gtk.Align.CENTER)
+        mais.connect("clicked", lambda *_: self._acrescentar_tunel())
+        adicionar.add_suffix(self._tipo)
+        adicionar.add_suffix(self._spec)
+        adicionar.add_suffix(mais)
+        linha.add_row(adicionar)
+        self._linha_adicionar = adicionar
+
+        self._redesenhar_tuneis()
+        return linha
+
+    def _atualizar_dica(self) -> None:
+        from warrenssh.ssh.tunnels import DYNAMIC, TIPOS
+
+        tipo = TIPOS[self._tipo.get_selected()]
+        self._spec.set_placeholder_text("1080" if tipo == DYNAMIC else "5432:localhost:5432")
+
+    def _acrescentar_tunel(self) -> None:
+        from warrenssh.ssh.tunnels import TIPOS, TunnelError, parse_spec
+
+        texto = self._spec.get_text().strip()
+        if not texto:
+            return
+        try:
+            self._tuneis.append(parse_spec(texto, TIPOS[self._tipo.get_selected()]))
+        except TunnelError as exc:
+            self._expander.set_subtitle(str(exc))
+            self._spec.add_css_class("error")
+            return
+        self._spec.remove_css_class("error")
+        self._spec.set_text("")
+        self._touched = True
+        self._redesenhar_tuneis()
+
+    def _redesenhar_tuneis(self) -> None:
+        from warrenssh.ssh.tunnels import FLAGS, describe, to_spec
+
+        for antiga in getattr(self, "_linhas_tunel", []):
+            self._expander.remove(antiga)
+        self._linhas_tunel = []
+
+        for indice, tunel in enumerate(self._tuneis):
+            item = Adw.ActionRow(
+                title=f"{FLAGS[tunel['type']]} {to_spec(tunel)}", subtitle=describe(tunel)
+            )
+            remover = Gtk.Button(
+                icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, has_frame=False,
+                tooltip_text="Remover este túnel",
+            )
+            remover.add_css_class("flat")
+            remover.connect("clicked", self._remover_tunel, indice)
+            item.add_suffix(remover)
+            self._expander.add_row(item)
+            self._linhas_tunel.append(item)
+
+        self._expander.set_subtitle(self._resumo_tuneis())
+
+    def _remover_tunel(self, _botao: Gtk.Button, indice: int) -> None:
+        if 0 <= indice < len(self._tuneis):
+            del self._tuneis[indice]
+            self._touched = True
+            self._redesenhar_tuneis()
+
+    def _resumo_tuneis(self) -> str:
+        quantos = len(getattr(self, "_tuneis", []))
+        if not quantos:
+            return "Nenhum. Abrem portas junto com a sessão."
+        return f"{quantos} túnel(is) abrem junto com a sessão"
+
     def _draw_swatch(self, _area: Gtk.DrawingArea, cr: object, w: int, h: int) -> None:
         cor = _rgba(self._cor_efetiva())
         cr.set_source_rgb(cor.red, cor.green, cor.blue)  # type: ignore[attr-defined]
@@ -299,6 +391,8 @@ class _FieldRow:
     def local_value(self) -> Any:
         """O valor local do campo — o rascunho, quando a herança está ligada.
 
+        Túneis vivem numa lista própria, editada linha a linha.
+
         Campos de escolha e booleanos sempre têm um estado no widget; gravá-lo
         sem o usuário ter mexido encheria o JSON de valores locais falsos. Por
         isso só devolvem valor se já tinham um ou se foram tocados.
@@ -307,6 +401,11 @@ class _FieldRow:
             if not (self._had_value or self._touched):
                 return None
             return self._draft_bool if self.is_inherited() else self._check.get_active()
+
+        if self.key in TUNNEL_FIELDS:
+            if self.is_inherited():
+                return self.node.properties.get(self.key) or None
+            return list(self._tuneis) or None
 
         if self.key in COLOR_FIELDS:
             if not (self._had_value or self._touched) or self._limpo:
@@ -353,6 +452,16 @@ class _FieldRow:
 
         if self.switch is not None:
             self.switch.set_tooltip_text(self._inherit_tooltip(inherited))
+
+        if self.key in TUNNEL_FIELDS:
+            self._linha_adicionar.set_sensitive(not inherited)
+            for item in getattr(self, "_linhas_tunel", []):
+                item.set_sensitive(not inherited)
+            if inherited:
+                self._expander.set_subtitle(f"Herdado do pai: {herdado or 'nenhum'}")
+            else:
+                self._expander.set_subtitle(self._resumo_tuneis())
+            return
 
         if self.key in COLOR_FIELDS:
             self._color.set_sensitive(not inherited)

@@ -65,3 +65,10 @@ tabbar .box {
   border-radius: 5px;
   border: 1px solid alpha(@window_fg_color, 0.25);
 }
+
+/* Ponto que acende na árvore quando a conexão tem sessão aberta. */
+.warrenssh-ativo {
+  color: @success_color;
+  -gtk-icon-size: 10px;
+  margin-right: 4px;
+}

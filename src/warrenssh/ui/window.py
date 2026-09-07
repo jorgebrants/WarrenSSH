@@ -8,15 +8,16 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gio, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, GObject, Gtk  # noqa: E402
 
 from warrenssh.models.editing import new_child_defaults  # noqa: E402
 from warrenssh.models.node import Node, new_node  # noqa: E402
 from warrenssh.models.sample import populate_example  # noqa: E402
-from warrenssh.models.store import Store  # noqa: E402
+from warrenssh.models.store import Store, StoreError  # noqa: E402
 from warrenssh import secrets  # noqa: E402
 from warrenssh.ui.editor import NodeEditor  # noqa: E402
 from warrenssh.ui.import_dialog import ImportDialog  # noqa: E402
+from warrenssh.ui.mremoteng_dialog import MRemoteNGDialog  # noqa: E402
 from warrenssh.ui.preferences import PreferencesDialog  # noqa: E402
 from warrenssh.ui.session_view import SessionView  # noqa: E402
 from warrenssh.ui.sidebar import Sidebar  # noqa: E402
@@ -30,6 +31,10 @@ ACCELS: dict[str, list[str]] = {
     "win.new-connection": ["<Primary>n"],
     "win.new-folder": ["<Primary><Shift>n"],
     "win.preferences": ["<Primary>comma"],
+    "win.toggle-theme": ["<Primary><Shift>b"],
+    "win.duplicate-node": ["<Primary>d"],
+    "win.move-up": ["<Primary><Shift>Up"],
+    "win.move-down": ["<Primary><Shift>Down"],
 }
 
 
@@ -47,12 +52,15 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
         self._editor: NodeEditor | None = None
         self._import_dialog: ImportDialog | None = None
         self._prefs_dialog: PreferencesDialog | None = None
+        self._mremoteng_dialog: MRemoteNGDialog | None = None
         self._sidebar = Sidebar(self.store)
         self._sidebar.connect("connection-activated", self._on_connection_activated)
+        self._sidebar.connect("tree-changed", lambda *_: self._persist())
 
         self._sessions = SessionView(self.store)
         self._sessions.connect("session-error", lambda _v, msg: self.toast(msg))
         self._sessions.connect("broadcast-changed", self._on_broadcast_changed)
+        self._sessions.connect("sessions-changed", self._on_sessions_changed)
 
         self._split_view = Adw.OverlaySplitView(
             sidebar_width_fraction=0.25,
@@ -67,6 +75,11 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
         self._setup_actions()
         self._apply_preferences()
         self.connect("close-request", self._on_close_request)
+        # Em "seguir o sistema", o tema muda sem passar por nós: o ícone do
+        # botão precisa acompanhar (ex.: agendamento noturno do GNOME).
+        Adw.StyleManager.get_default().connect(
+            "notify::dark", lambda *_: self._update_theme_button()
+        )
 
     # ------------------------------------------------------------------ montagem
 
@@ -114,10 +127,22 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
         self._broadcast_button.connect("toggled", self._on_broadcast_button_toggled)
         header.pack_start(self._broadcast_button)
 
+        self._theme_button = Gtk.Button()
+        self._theme_button.connect("clicked", lambda *_: self._toggle_theme())
+        header.pack_end(self._theme_button)
+
         menu = Gio.Menu()
-        menu.append("Importar do ~/.ssh/config", "win.import-ssh-config")
-        menu.append("Preferências", "win.preferences")
-        menu.append("Sair", "app.quit")
+        arvore = Gio.Menu()
+        arvore.append("Importar do ~/.ssh/config", "win.import-ssh-config")
+        arvore.append("Importar do mRemoteNG…", "win.import-mremoteng")
+        arvore.append("Importar árvore…", "win.import-tree")
+        arvore.append("Exportar árvore…", "win.export-tree")
+        menu.append_section(None, arvore)
+
+        resto = Gio.Menu()
+        resto.append("Preferências", "win.preferences")
+        resto.append("Sair", "app.quit")
+        menu.append_section(None, resto)
         header.pack_end(
             Gtk.MenuButton(
                 icon_name="open-menu-symbolic", tooltip_text="Menu", menu_model=menu
@@ -152,6 +177,13 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
             ("delete-node", lambda *_: self._delete_selected()),
             ("import-ssh-config", lambda *_: self._import_ssh_config()),
             ("preferences", lambda *_: self._open_preferences()),
+            ("toggle-theme", lambda *_: self._toggle_theme()),
+            ("duplicate-node", lambda *_: self._duplicate_selected()),
+            ("move-up", lambda *_: self._sidebar.move_selected(-1)),
+            ("move-down", lambda *_: self._sidebar.move_selected(+1)),
+            ("export-tree", lambda *_: self._export_tree()),
+            ("import-tree", lambda *_: self._import_tree()),
+            ("import-mremoteng", lambda *_: self._import_mremoteng()),
             ("reconnect-tab", lambda *_: self._sessions.reconnect_current()),
             ("close-tab", lambda *_: self._sessions.close_current()),
             ("focus-search", lambda *_: self._sidebar.focus_search()),
@@ -256,6 +288,138 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
             tab.close()
         self.destroy()
 
+    def _toggle_theme(self) -> None:
+        """Alterna claro/escuro pelo botão do canto superior direito.
+
+        Vale também quando a preferência está em "seguir o sistema": neste caso
+        assumimos o oposto do tema que está valendo agora, e a escolha passa a
+        ser explícita (o menu de Preferências devolve o automático).
+        """
+        escuro_agora = Adw.StyleManager.get_default().get_dark()
+        self.store.preferences.set_app("theme", "light" if escuro_agora else "dark")
+        try:
+            self.store.preferences.save_json()
+        except OSError as exc:
+            self.toast(f"Não deu para salvar a preferência: {exc}")
+        self._apply_preferences()
+
+    def _update_theme_button(self) -> None:
+        """O ícone mostra o tema para o qual o clique leva, não o atual."""
+        if not hasattr(self, "_theme_button"):
+            return
+        escolha = str(self.store.preferences.get_app("theme"))
+        escuro = Adw.StyleManager.get_default().get_dark()
+        vai_para_escuro = not escuro
+
+        self._theme_button.set_icon_name(
+            "weather-clear-night-symbolic" if vai_para_escuro else "weather-clear-symbolic"
+        )
+        alvo = "escuro" if vai_para_escuro else "claro"
+        seguindo = " (agora seguindo o sistema)" if escolha == "system" else ""
+        self._theme_button.set_tooltip_text(
+            f"Mudar para o tema {alvo}{seguindo} — Ctrl+Shift+B"
+        )
+
+    def _on_sessions_changed(self, *_args: object) -> None:
+        """Acende na árvore as conexões que estão abertas."""
+        self._sidebar.set_active_nodes(
+            {t.node.id for t in self._sessions.terminal_tabs() if t.is_running}
+        )
+
+    def _duplicate_selected(self) -> None:
+        node = self._sidebar.selected_node()
+        if node is None:
+            self.toast("Selecione um item para duplicar.")
+            return
+        copia = self.store.duplicate(node.id)
+        if copia is None:
+            return
+        self._persist()
+        self._sidebar.reload()
+        self._sidebar.select_node_id(copia.id)
+        self.toast(f"“{copia.name}” criado.")
+
+    # ------------------------------------------------------ exportar/importar
+
+    def _export_tree(self) -> None:
+        dialogo = Gtk.FileDialog(
+            title="Exportar árvore",
+            initial_name="warrenssh-arvore.json",
+        )
+        dialogo.save(self, None, self._on_export_escolhido)
+
+    def _on_export_escolhido(self, dialogo: Gtk.FileDialog, resultado: object) -> None:
+        try:
+            arquivo = dialogo.save_finish(resultado)
+        except GLib.Error:
+            return  # cancelado
+        if arquivo is None or arquivo.get_path() is None:
+            return
+        try:
+            self.store.export_json(arquivo.get_path())
+        except OSError as exc:
+            self.toast(f"Não deu para exportar: {exc}")
+            return
+        self.toast("Árvore exportada. As senhas continuam só no chaveiro.")
+
+    def _import_tree(self) -> None:
+        dialogo = Gtk.FileDialog(title="Importar árvore")
+        dialogo.open(self, None, self._on_import_escolhido)
+
+    def _on_import_escolhido(self, dialogo: Gtk.FileDialog, resultado: object) -> None:
+        try:
+            arquivo = dialogo.open_finish(resultado)
+        except GLib.Error:
+            return
+        if arquivo is None or arquivo.get_path() is None:
+            return
+        try:
+            importados = self.store.import_json(arquivo.get_path())
+        except StoreError as exc:
+            self.toast(str(exc))
+            return
+        self._persist()
+        self._sidebar.reload()
+        self.toast(f"{len(importados)} item(ns) importado(s).")
+
+    def _import_mremoteng(self) -> None:
+        filtro = Gtk.FileFilter(name="confCons.xml do mRemoteNG")
+        filtro.add_pattern("*.xml")
+        filtros = Gio.ListStore.new(Gtk.FileFilter)
+        filtros.append(filtro)
+
+        dialogo = Gtk.FileDialog(title="Importar do mRemoteNG", filters=filtros)
+        dialogo.open(self, None, self._on_mremoteng_escolhido)
+
+    def _on_mremoteng_escolhido(self, dialogo: Gtk.FileDialog, resultado: object) -> None:
+        from warrenssh.ssh.mremoteng import MRemoteNGError, apply_inheritance, parse_file
+
+        try:
+            arquivo = dialogo.open_finish(resultado)
+        except GLib.Error:
+            return
+        if arquivo is None or arquivo.get_path() is None:
+            return
+
+        caminho = arquivo.get_path()
+        try:
+            lido = apply_inheritance(parse_file(caminho))
+        except MRemoteNGError as exc:
+            self.toast(str(exc))
+            return
+
+        self._mremoteng_dialog = MRemoteNGDialog(self.store, caminho, lido)
+        self._mremoteng_dialog.connect("imported", self._on_mremoteng_importado)
+        self._mremoteng_dialog.connect(
+            "closed", lambda *_: setattr(self, "_mremoteng_dialog", None)
+        )
+        self._mremoteng_dialog.present(self)
+
+    def _on_mremoteng_importado(self, _dialogo: object, quantos: int) -> None:
+        self._persist()
+        self._sidebar.reload()
+        self.toast(f"{quantos} item(ns) importado(s) do mRemoteNG.")
+
     def _open_preferences(self) -> None:
         self._prefs_dialog = PreferencesDialog(self.store.preferences)
         self._prefs_dialog.connect("changed", lambda *_: self._apply_preferences())
@@ -277,6 +441,7 @@ class WarrenSSHWindow(Adw.ApplicationWindow):
 
         self._sidebar.set_single_click(bool(prefs.get_app("activate_on_single_click")))
         self._sessions.refresh_appearance()
+        self._update_theme_button()
 
     def _import_ssh_config(self) -> None:
         self._import_dialog = ImportDialog(self.store)

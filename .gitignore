@@ -13,3 +13,7 @@ repo/
 
 # Documento de planejamento (uso interno, não vai para o repositório público)
 warrenssh-plano-de-desenvolvimento.md
+
+# Exports do mRemoteNG deixados na pasta para teste: contêm hosts reais
+*.xml
+!packaging/*.xml

@@ -26,6 +26,8 @@ class SessionView(Gtk.Box):
         "session-error": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         # (ligado) — o modo broadcast mudou.
         "broadcast-changed": (GObject.SignalFlags.RUN_FIRST, None, (bool,)),
+        # Abriu, caiu ou fechou alguma sessão.
+        "sessions-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
     def __init__(self, store: Store) -> None:
@@ -73,6 +75,7 @@ class SessionView(Gtk.Box):
         page.set_icon(Gio.ThemedIcon.new("utilities-terminal-symbolic"))
         self.tab_view.set_selected_page(page)
         self._refresh_broadcast_marks()
+        self.emit("sessions-changed")
         return page
 
     def refresh_appearance(self) -> None:
@@ -186,8 +189,10 @@ class SessionView(Gtk.Box):
         if page is not None:
             page.set_title(f"{tab.node.name} (encerrada)")
         self._refresh_broadcast_marks()
+        self.emit("sessions-changed")
 
     def _on_pages_changed(self, *_args: object) -> None:
+        self.emit("sessions-changed")
         has_pages = self.tab_view.get_n_pages() > 0
         self._stack.set_visible_child_name("sessions" if has_pages else "welcome")
         self.tab_bar.set_visible(has_pages)

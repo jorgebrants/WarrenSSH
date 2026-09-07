@@ -25,6 +25,7 @@ FIELD_LABELS: dict[str, str] = {
     "server_alive_interval": "Manter viva (segundos)",
     "forward_agent": "Encaminhar o agente SSH",
     "compression": "Compressão",
+    "tunnels": "Túneis de porta",
     "request_pty": "Forçar PTY (-t)",
     "extra_ssh_args": "Argumentos extras do ssh",
     "startup_command": "Comando inicial",
@@ -44,6 +45,7 @@ INT_FIELDS: frozenset[str] = frozenset(
     {"port", "scrollback_lines", "server_alive_interval"}
 )
 LIST_FIELDS: frozenset[str] = frozenset({"extra_ssh_args"})
+TUNNEL_FIELDS: frozenset[str] = frozenset({"tunnels"})
 CHOICE_FIELDS: dict[str, tuple[str, ...]] = {"color_scheme": ("system", "dark", "light")}
 COLOR_FIELDS: frozenset[str] = frozenset({"foreground_color", "background_color"})
 
@@ -131,6 +133,9 @@ def parse_value(key: str, raw: Any) -> Any:
             raise EditingError(f"{FIELD_LABELS.get(key, key)}: {exc}") from exc
         return parts or None
 
+    if key in TUNNEL_FIELDS:
+        return _parse_tuneis(raw)
+
     if key in COLOR_FIELDS:
         return _parse_cor(str(raw))
 
@@ -141,6 +146,20 @@ def parse_value(key: str, raw: Any) -> Any:
         return text
 
     return str(raw)
+
+
+def _parse_tuneis(raw: Any) -> list[dict[str, Any]] | None:
+    """Valida cada túnel da lista; um só inválido recusa tudo, com o motivo."""
+    from warrenssh.ssh.tunnels import TunnelError, normalize
+
+    if not raw:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        raise EditingError("Túneis: esperava uma lista")
+    try:
+        return [normalize(t) for t in raw] or None
+    except TunnelError as exc:
+        raise EditingError(f"Túneis: {exc}") from exc
 
 
 def _parse_cor(texto: str) -> str:
@@ -162,6 +181,10 @@ def format_value(key: str, value: Any) -> str:
         return " ".join(shlex.quote(str(part)) for part in value)
     if key in BOOL_FIELDS:
         return "sim" if value else "não"
+    if key in TUNNEL_FIELDS and isinstance(value, (list, tuple)):
+        from warrenssh.ssh.tunnels import FLAGS, to_spec
+
+        return ", ".join(f"{FLAGS[t['type']]} {to_spec(t)}" for t in value)
     return str(value)
 
 

@@ -8,6 +8,11 @@ libadwaita.
 - Árvore de pastas e conexões; cada propriedade pode ter valor local ou herdar do pai.
 - Segredos em `libsecret`, nunca no JSON.
 - Import de `~/.ssh/config`, inclusive com `Include`.
+- Import do `confCons.xml` do mRemoteNG, aproveitando a herança.
+- Túneis de porta (`-L`, `-R`, `-D`) por conexão ou por pasta.
+- Arrastar para reorganizar a árvore, duplicar itens, exportar e importar.
+- Ponto verde nas conexões com sessão aberta.
+- Botão de tema claro/escuro no canto superior direito.
 
 ## Requisitos
 
@@ -104,6 +109,44 @@ Para apontar para outro binário (ou embrulhar o comando), use:
 WARRENSSH_SSH_BINARY="/usr/bin/ssh -F /caminho/config" warrenssh
 ```
 
+## Vindo do mRemoteNG
+
+Menu → **Importar do mRemoteNG…**, aponte para o `confCons.xml`. A prévia mostra
+o que vem antes de mexer na árvore.
+
+Só conexões SSH são importadas — RDP e VNC são contados e deixados de fora. As
+**senhas não vêm**: o mRemoteNG as cifra com AES, e o WarrenSSH não tem
+dependência de criptografia. Recadastre-as no editor e elas vão para o chaveiro.
+
+A opção **"Agrupar valores repetidos nas pastas"** é o que traduz um export do
+mRemoteNG para o idioma daqui: onde a maioria das conexões de uma pasta repete o
+mesmo usuário ou porta, esse valor sobe para a pasta e as conexões passam a
+herdá-lo. Num arquivo real de 377 conexões, isso tirou 351 usuários e 347 portas
+repetidos — trocar o usuário depois vira uma edição só.
+
+## Túneis de porta
+
+Cada conexão (ou pasta) pode declarar túneis, que sobem junto com a sessão:
+
+| Tipo | Opção | O que faz |
+|---|---|---|
+| Local | `-L` | abre uma porta **aqui** que sai **lá** — ex.: alcançar um banco que só escuta em `localhost` do servidor |
+| Remoto | `-R` | abre uma porta **lá** que volta para **cá** |
+| SOCKS | `-D` | proxy para navegar como se estivesse na rede do servidor |
+
+No editor há uma linha "Túneis de porta": escolha o tipo e escreva
+`5432:localhost:5432` (ou só a porta, no SOCKS). Como é herdável, uma pasta pode
+definir os túneis de toda uma frota.
+
+## Segurança dos seus dados
+
+- A árvore é gravada de forma atômica, e as **3 versões anteriores** ficam
+  guardadas como `tree.json.bak-<data>`.
+- Se o arquivo corromper, ele é posto de lado como `tree.json.ilegivel-<data>`,
+  o backup mais recente é recuperado e o app avisa — em vez de não abrir.
+- **Exportar árvore…** e **Importar árvore…** no menu. A exportação leva só a
+  estrutura: senhas continuam no chaveiro.
+
 ## Preferências globais
 
 `Ctrl+,` ou menu → **Preferências**. Três páginas:
@@ -178,6 +221,10 @@ for t in (16, 24, 32, 48, 64, 128, 256, 512):
 | `Ctrl+Shift+A` | selecionar tudo no terminal |
 | `Ctrl+ +` / `Ctrl+ -` / `Ctrl+0` | aumentar, diminuir e restaurar a fonte |
 | `Ctrl+Q` | sair |
+| `Ctrl+D` | duplicar o item selecionado |
+| `Ctrl+Shift+↑` / `↓` | mover o item na árvore |
+| `Ctrl+,` | preferências |
+| `Ctrl+Shift+B` | alternar tema claro/escuro |
 
 ## Licença
 

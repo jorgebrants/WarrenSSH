@@ -34,6 +34,7 @@ CONNECTION_KEYS: tuple[str, ...] = (
     "server_alive_interval",
     "forward_agent",
     "compression",
+    "tunnels",
 )
 
 #: Valores usados quando a cascata não produz nada para a chave.

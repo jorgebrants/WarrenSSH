@@ -8,6 +8,8 @@ import shlex
 import shutil
 from typing import Any, Iterable, Sequence
 
+from warrenssh.ssh.tunnels import TunnelError, to_args as tunnel_args
+
 SSH_BINARY = "ssh"
 
 #: Marca que o processo está dentro de um sandbox Flatpak.
@@ -90,6 +92,11 @@ def build_ssh_argv(
 
     if resolved.get("compression"):
         argv.append("-C")
+
+    try:
+        argv += tunnel_args(resolved.get("tunnels") or ())
+    except TunnelError as exc:
+        raise CommandError(f"túnel inválido: {exc}") from exc
 
     argv += _as_args(resolved.get("extra_ssh_args"))
 
